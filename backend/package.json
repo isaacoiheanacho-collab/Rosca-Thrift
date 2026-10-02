@@ -1,9 +1,12 @@
 {
   "name": "rosca-backend",
   "version": "0.1.0",
-  "description": "ROSCA thrift & savings ledger — backend API",
+  "description": "ROSCA thrift & savings ledger - backend API",
   "main": "dist/server.js",
   "license": "MIT",
+  "engines": {
+    "node": ">=20.0.0 <25.0.0"
+  },
   "scripts": {
     "dev": "nodemon",
     "build": "tsc",
@@ -13,6 +16,12 @@
     "smoke": "ts-node --transpile-only scripts/smoke-test.ts"
   },
   "dependencies": {
+    "@types/cors": "^2.8.19",
+    "@types/express": "^5.0.6",
+    "@types/jsonwebtoken": "^9.0.10",
+    "@types/multer": "^2.3.0",
+    "@types/node": "^20.17.10",
+    "@types/pg": "^8.11.10",
     "bcryptjs": "^3.0.3",
     "cloudinary": "^2.11.0",
     "cors": "^2.8.6",
@@ -25,17 +34,11 @@
     "pg": "^8.23.1",
     "pino": "^9.5.0",
     "pino-pretty": "^13.0.0",
+    "typescript": "^5.6.3",
     "zod": "^3.23.8"
   },
   "devDependencies": {
-    "@types/cors": "^2.8.19",
-    "@types/express": "^5.0.6",
-    "@types/jsonwebtoken": "^9.0.10",
-    "@types/multer": "^2.3.0",
-    "@types/node": "^26.6.3",
-    "@types/pg": "^8.23.1",
     "nodemon": "^3.1.14",
-    "ts-node": "^10.9.2",
-    "typescript": "5.6.3"
+    "ts-node": "^10.9.2"
   }
 }
