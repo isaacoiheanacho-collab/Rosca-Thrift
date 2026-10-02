@@ -6,6 +6,7 @@ import 'dotenv/config';
 import { env } from './config/env';
 import { logger } from './logger';
 import { pool, testConnection } from './db';
+import { redis, testRedis, closeRedis } from './utils/redis';
 import { requestId } from './middleware/requestId';
 import { errorHandler, notFoundHandler } from './middleware/errorHandler';
 import { generalLimiter, authLimiter } from './middleware/rateLimit';
@@ -53,15 +54,18 @@ app.use((req: Request, res: Response, next) => {
   next();
 });
 
-// Health check
+// Health check - reports server + DB + Redis
 app.get('/health', async (_req: Request, res: Response) => {
-  const db = await testConnection();
-  res.status(db.ok ? 200 : 503).json({
-    ok: db.ok,
+  const [db, cache] = await Promise.all([testConnection(), testRedis()]);
+  const ok = db.ok && cache.ok;
+
+  res.status(ok ? 200 : 503).json({
+    ok,
     service: 'rosca-backend',
     version: '0.1.0',
     time: new Date().toISOString(),
     database: db,
+    redis: cache,
   });
 });
 
@@ -82,19 +86,19 @@ app.use(notFoundHandler);
 app.use(errorHandler);
 
 // Graceful shutdown
-process.on('SIGINT', async () => {
-  logger.info('Shutting down...');
-  await pool.end();
+async function shutdown(signal: string): Promise<void> {
+  logger.info(`Received ${signal}, shutting down...`);
+  await Promise.allSettled([pool.end(), closeRedis()]);
   process.exit(0);
-});
+}
 
-process.on('SIGTERM', async () => {
-  logger.info('Received SIGTERM, shutting down...');
-  await pool.end();
-  process.exit(0);
-});
+process.on('SIGINT', () => shutdown('SIGINT'));
+process.on('SIGTERM', () => shutdown('SIGTERM'));
 
 app.listen(env.PORT, () => {
   logger.info(`ROSCA backend listening on http://localhost:${env.PORT}`);
   logger.info(`Health check: http://localhost:${env.PORT}/health`);
 });
+
+// Silence unused-import warning for `redis` (used via side-effect imports)
+void redis;

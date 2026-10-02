@@ -3,21 +3,38 @@
  *
  * Loads .env into process.env, then validates every variable we need.
  * If any required variable is missing or malformed, the process exits
- * with a clear message — no silent failures at runtime.
+ * with a clear message - no silent failures at runtime.
  */
 
 import 'dotenv/config';
 import { z } from 'zod';
 
+/** Postgres connection URL (postgresql:// or postgres://). */
+const PostgresUrl = z
+  .string()
+  .min(1, 'is required')
+  .refine((v) => /^postgres(ql)?:\/\//.test(v), {
+    message: 'must start with postgresql:// or postgres://',
+  });
+
+/** Redis connection URL (redis:// or rediss:// for TLS). */
+const RedisUrl = z
+  .string()
+  .min(1, 'is required')
+  .refine((v) => /^rediss?:\/\//.test(v), {
+    message: 'must start with redis:// or rediss://',
+  });
+
 const EnvSchema = z.object({
   NODE_ENV: z.enum(['development', 'test', 'production']).default('development'),
   PORT: z.coerce.number().int().positive().default(4001),
 
-  DATABASE_URL: z.string().url(),
-  DIRECT_URL: z.string().url().optional(),
+  DATABASE_URL: PostgresUrl,
+  DIRECT_URL: PostgresUrl.optional(),
+  REDIS_URL: RedisUrl,
 
-  JWT_ACCESS_SECRET: z.string().min(32, 'JWT_ACCESS_SECRET must be at least 32 chars'),
-  JWT_REFRESH_SECRET: z.string().min(32, 'JWT_REFRESH_SECRET must be at least 32 chars'),
+  JWT_ACCESS_SECRET: z.string().min(32, 'must be at least 32 chars'),
+  JWT_REFRESH_SECRET: z.string().min(32, 'must be at least 32 chars'),
   JWT_ACCESS_TTL: z.coerce.number().int().positive().default(900),
   JWT_REFRESH_TTL: z.coerce.number().int().positive().default(2_592_000),
 
@@ -40,7 +57,9 @@ if (!parsed.success) {
 
 export const env = Object.freeze({
   ...parsed.data,
-  CORS_ORIGINS_LIST: parsed.data.CORS_ORIGINS.split(',').map((s) => s.trim()).filter(Boolean),
+  CORS_ORIGINS_LIST: parsed.data.CORS_ORIGINS.split(',')
+    .map((s) => s.trim())
+    .filter(Boolean),
   IS_PRODUCTION: parsed.data.NODE_ENV === 'production',
   IS_DEVELOPMENT: parsed.data.NODE_ENV === 'development',
   IS_TEST: parsed.data.NODE_ENV === 'test',
