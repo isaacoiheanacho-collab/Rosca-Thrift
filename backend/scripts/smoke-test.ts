@@ -1,15 +1,19 @@
 /**
  * ROSCA Backend - Smoke Test
  *
- * Runs 10 checks against the auth flow. Prints PASS/FAIL for each.
- * Requires: server running on http://localhost:4001
+ * Runs 11 checks against the API. Prints PASS/FAIL for each.
+ * Requires:
+ *   - server running on http://localhost:4001 (npm run dev)
+ *   - REDIS_URL set in .env (for test 11)
  *
- * Run with: npm run smoke
+ * Run with: yarn smoke
  */
 
-const BASE = process.env.SMOKE_BASE ?? 'http://localhost:4001';
+import 'dotenv/config';
+import { Queue, QueueEvents } from 'bullmq';
 
-// ---- Tiny test harness ----
+const BASE = process.env.SMOKE_BASE ?? 'http://localhost:4001';
+const REDIS_URL = process.env.REDIS_URL;
 
 interface TestResult {
   name: string;
@@ -29,8 +33,6 @@ function fail(name: string, detail: string): void {
   console.log(`  FAIL  ${name}`);
   console.log(`        ${detail}`);
 }
-
-// ---- HTTP helper ----
 
 interface ApiResponse {
   ok?: boolean;
@@ -57,8 +59,6 @@ async function api(
   return { status: res.status, json };
 }
 
-// ---- Typed accessors for responses ----
-
 interface AuthSuccess {
   ok: true;
   data: {
@@ -67,16 +67,9 @@ interface AuthSuccess {
   };
 }
 
-interface AuthError {
-  ok: false;
-  error: { code: string; message: string };
-}
-
 function isAuthSuccess(r: ApiResponse): r is AuthSuccess {
   return r.ok === true && typeof r.data === 'object' && r.data !== null;
 }
-
-// ---- Test runner ----
 
 async function run(): Promise<number> {
   const email = `smoke${Math.floor(Math.random() * 90000 + 10000)}@rosca.local`;
@@ -91,14 +84,14 @@ async function run(): Promise<number> {
   console.log('============================================');
   console.log('');
 
-  // 1 — health
+  // 1 - health
   {
     const r = await api('GET', '/health');
     if (r.status === 200 && r.json.ok === true) pass('health check');
     else fail('health check', `status=${r.status} body=${JSON.stringify(r.json)}`);
   }
 
-  // 2 — register
+  // 2 - register
   let refreshToken = '';
   {
     const r = await api('POST', '/api/auth/register', { email, password, fullName });
@@ -110,7 +103,7 @@ async function run(): Promise<number> {
     }
   }
 
-  // 3 — weak password rejected
+  // 3 - weak password rejected
   {
     const r = await api('POST', '/api/auth/register', {
       email: `weak${Date.now()}@rosca.local`,
@@ -122,7 +115,7 @@ async function run(): Promise<number> {
     else fail('weak password rejected', `status=${r.status} body=${JSON.stringify(r.json)}`);
   }
 
-  // 4 — duplicate email rejected
+  // 4 - duplicate email rejected
   {
     const r = await api('POST', '/api/auth/register', { email, password, fullName: 'Clone' });
     if (r.status === 409 && r.json.error?.code === 'AUTH_EMAIL_TAKEN')
@@ -130,7 +123,7 @@ async function run(): Promise<number> {
     else fail('duplicate email rejected', `status=${r.status} body=${JSON.stringify(r.json)}`);
   }
 
-  // 5 — login
+  // 5 - login
   {
     const r = await api('POST', '/api/auth/login', { email, password });
     if (r.status === 200 && isAuthSuccess(r.json)) {
@@ -141,7 +134,7 @@ async function run(): Promise<number> {
     }
   }
 
-  // 6 — wrong password rejected
+  // 6 - wrong password rejected
   {
     const r = await api('POST', '/api/auth/login', { email, password: 'WrongPass1#' });
     if (r.status === 401 && r.json.error?.code === 'AUTH_INVALID_CREDENTIALS')
@@ -149,7 +142,7 @@ async function run(): Promise<number> {
     else fail('wrong password rejected', `status=${r.status} body=${JSON.stringify(r.json)}`);
   }
 
-  // 7 — refresh rotates
+  // 7 - refresh rotates
   let rotatedToken = '';
   {
     const r = await api('POST', '/api/auth/refresh', { refreshToken });
@@ -165,7 +158,7 @@ async function run(): Promise<number> {
     }
   }
 
-  // 8 — reuse detection
+  // 8 - reuse detection
   {
     const r = await api('POST', '/api/auth/refresh', { refreshToken });
     if (r.status === 401 && r.json.error?.code === 'AUTH_TOKEN_REUSED')
@@ -173,15 +166,19 @@ async function run(): Promise<number> {
     else fail('reuse detection fires', `status=${r.status} body=${JSON.stringify(r.json)}`);
   }
 
-  // 9 — after reuse, the rotated token is also dead
+  // 9 - all sessions revoked after reuse
   {
     const r = await api('POST', '/api/auth/refresh', { refreshToken: rotatedToken });
     if (r.status === 401 && r.json.error?.code === 'AUTH_TOKEN_REUSED')
       pass('all sessions revoked after reuse');
-    else fail('all sessions revoked after reuse', `status=${r.status} body=${JSON.stringify(r.json)}`);
+    else
+      fail(
+        'all sessions revoked after reuse',
+        `status=${r.status} body=${JSON.stringify(r.json)}`,
+      );
   }
 
-  // 10 — 404 for unknown route
+  // 10 - 404 for unknown route
   {
     const r = await api('GET', '/api/does-not-exist');
     if (r.status === 404 && r.json.error?.code === 'ROUTE_NOT_FOUND')
@@ -189,7 +186,51 @@ async function run(): Promise<number> {
     else fail('unknown route returns 404', `status=${r.status} body=${JSON.stringify(r.json)}`);
   }
 
-  // Summary
+  // 11 - BullMQ queue: enqueue a job and wait for the worker to process it
+  if (!REDIS_URL) {
+    fail('bullmq job processed', 'REDIS_URL not set in .env');
+  } else {
+    try {
+      const testQueue = new Queue('notifications', {
+        connection: { url: REDIS_URL } as never,
+      });
+      const queueEvents = new QueueEvents('notifications', {
+        connection: { url: REDIS_URL } as never,
+      });
+
+      const job = await testQueue.add('notification.send', {
+        type: 'notification.send',
+        userId: 'smoke-test-user',
+        channel: 'in-app',
+        title: 'Smoke test',
+        body: 'If you see this, BullMQ works.',
+      });
+
+      const jobId = job.id;
+      let completed = false;
+
+      const timeout = new Promise<void>((resolve) => setTimeout(resolve, 10_000));
+      const done = new Promise<void>((resolve) => {
+        queueEvents.on('completed', (event) => {
+          if (event.jobId === jobId) {
+            completed = true;
+            resolve();
+          }
+        });
+      });
+
+      await Promise.race([done, timeout]);
+
+      await queueEvents.close();
+      await testQueue.close();
+
+      if (completed) pass('bullmq job processed');
+      else fail('bullmq job processed', 'Timed out waiting for worker to process job');
+    } catch (err) {
+      fail('bullmq job processed', `Error: ${(err as Error).message}`);
+    }
+  }
+
   const passed = results.filter((r) => r.passed).length;
   const failed = results.length - passed;
 
