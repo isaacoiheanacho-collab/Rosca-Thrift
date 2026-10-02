@@ -7,6 +7,7 @@ import { env } from './config/env';
 import { logger } from './logger';
 import { pool, testConnection } from './db';
 import { redis, testRedis, closeRedis } from './utils/redis';
+import { testS3 } from './utils/s3';
 import { startAllWorkers, stopAllWorkers } from './queue';
 import { requestId } from './middleware/requestId';
 import { errorHandler, notFoundHandler } from './middleware/errorHandler';
@@ -24,6 +25,7 @@ app.use(generalLimiter);
 
 app.use((req: Request, res: Response, next) => {
   const start = Date.now();
+
   res.on('finish', () => {
     req.log.info(
       {
@@ -35,12 +37,19 @@ app.use((req: Request, res: Response, next) => {
       'request',
     );
   });
+
   next();
 });
 
 app.get('/health', async (_req: Request, res: Response) => {
-  const [db, cache] = await Promise.all([testConnection(), testRedis()]);
-  const ok = db.ok && cache.ok;
+  const [db, cache, storage] = await Promise.all([
+    testConnection(),
+    testRedis(),
+    testS3(),
+  ]);
+
+  const ok = db.ok && cache.ok && storage.ok;
+
   res.status(ok ? 200 : 503).json({
     ok,
     service: 'rosca-backend',
@@ -48,6 +57,7 @@ app.get('/health', async (_req: Request, res: Response) => {
     time: new Date().toISOString(),
     database: db,
     redis: cache,
+    storage,
   });
 });
 
@@ -66,7 +76,9 @@ app.use(errorHandler);
 
 async function shutdown(signal: string): Promise<void> {
   logger.info(`Received ${signal}, shutting down...`);
+
   await Promise.allSettled([stopAllWorkers(), pool.end(), closeRedis()]);
+
   process.exit(0);
 }
 
