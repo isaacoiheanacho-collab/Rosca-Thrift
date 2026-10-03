@@ -1,24 +1,23 @@
 /**
- * Auth module — request schemas.
+ * Auth schemas - phone-first.
  *
- * These are the only shapes the auth endpoints accept. Anything else
- * is rejected before it reaches the service layer.
+ * Registration is phone + password. Email is optional (kept for future use).
+ * OTP is sent automatically on register; user must verify before login works.
  */
 
 import { z } from 'zod';
 
-const PasswordSchema = z
-  .string()
-  .min(10, 'Password must be at least 10 characters')
-  .max(72, 'Password must be at most 72 characters') // bcrypt truncates at 72 bytes
-  .refine((p) => /[0-9]/.test(p), 'Password must contain at least one number')
-  .refine((p) => /[^A-Za-z0-9]/.test(p), 'Password must contain at least one symbol');
-
-const EmailSchema = z.string().trim().toLowerCase().email('Invalid email address');
 const PhoneSchema = z
   .string()
   .trim()
-  .regex(/^\+?[1-9]\d{6,14}$/, 'Invalid phone number (E.164 format expected)');
+  .regex(/^\+[1-9]\d{6,14}$/, 'Phone must be in E.164 format (e.g. +447912345678)');
+
+const PasswordSchema = z
+  .string()
+  .min(10, 'Password must be at least 10 characters')
+  .max(72, 'Password must be at most 72 characters')
+  .refine((p) => /[0-9]/.test(p), 'Password must contain at least one number')
+  .refine((p) => /[^A-Za-z0-9]/.test(p), 'Password must contain at least one symbol');
 
 const FullNameSchema = z
   .string()
@@ -26,33 +25,47 @@ const FullNameSchema = z
   .min(2, 'Full name must be at least 2 characters')
   .max(120, 'Full name is too long');
 
-export const RegisterSchema = z
-  .object({
-    email: EmailSchema.optional(),
-    phone: PhoneSchema.optional(),
-    password: PasswordSchema,
-    fullName: FullNameSchema,
-  })
-  .refine((d) => d.email || d.phone, {
-    message: 'Either email or phone is required',
-    path: ['email'],
-  });
+const EmailSchema = z.string().trim().toLowerCase().email('Invalid email address');
 
-export const LoginSchema = z
-  .object({
-    email: EmailSchema.optional(),
-    phone: PhoneSchema.optional(),
-    password: z.string().min(1, 'Password is required'),
-  })
-  .refine((d) => d.email || d.phone, {
-    message: 'Either email or phone is required',
-    path: ['email'],
-  });
+const OtpCodeSchema = z
+  .string()
+  .trim()
+  .regex(/^\d{6}$/, 'Code must be 6 digits');
+
+export const RegisterSchema = z.object({
+  phone: PhoneSchema,
+  password: PasswordSchema,
+  fullName: FullNameSchema,
+  email: EmailSchema.optional(),
+});
+
+export const VerifyPhoneSchema = z.object({
+  phone: PhoneSchema,
+  code: OtpCodeSchema,
+});
+
+export const LoginSchema = z.object({
+  phone: PhoneSchema,
+  password: z.string().min(1, 'Password is required'),
+});
 
 export const RefreshSchema = z.object({
   refreshToken: z.string().min(20, 'Refresh token is required'),
 });
 
+export const ForgotPasswordSchema = z.object({
+  phone: PhoneSchema,
+});
+
+export const ResetPasswordSchema = z.object({
+  phone: PhoneSchema,
+  code: OtpCodeSchema,
+  newPassword: PasswordSchema,
+});
+
 export type RegisterInput = z.infer<typeof RegisterSchema>;
+export type VerifyPhoneInput = z.infer<typeof VerifyPhoneSchema>;
 export type LoginInput = z.infer<typeof LoginSchema>;
 export type RefreshInput = z.infer<typeof RefreshSchema>;
+export type ForgotPasswordInput = z.infer<typeof ForgotPasswordSchema>;
+export type ResetPasswordInput = z.infer<typeof ResetPasswordSchema>;

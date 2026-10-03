@@ -32,7 +32,7 @@ export class EmailTakenError extends ConflictError {
 
 export class PhoneTakenError extends ConflictError {
   constructor() {
-    super('Phone is already registered', AuthErrorCode.PHONE_TAKEN);
+    super('Phone number is already registered', AuthErrorCode.PHONE_TAKEN);
   }
 }
 

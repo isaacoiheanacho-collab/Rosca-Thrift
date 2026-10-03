@@ -1,15 +1,14 @@
 /**
- * Auth service — business logic for registration, login, token refresh, logout.
+ * Auth service - phone-first with OTP.
  *
- * Rules enforced here:
- *  - Registration is atomic (user row + first refresh token in one transaction).
- *  - Every successful and failed auth attempt is written to audit_logs.
- *  - Refresh tokens are rotated: each use issues a new token and revokes the old.
- *  - If a revoked refresh token is presented again → all user sessions revoked
- *    (OAuth 2.0 BCP for theft detection).
+ * Flow:
+ *  1. register(phone, password, fullName) → creates user (PENDING) + sends OTP
+ *  2. verifyPhone(phone, code) → marks phone_verified_at, status=VERIFIED → returns tokens
+ *  3. login(phone, password) → if not verified, requires verify-phone first
+ *  4. forgotPassword(phone) → sends reset OTP
+ *  5. resetPassword(phone, code, newPassword) → changes password, revokes all sessions
  */
 
-import { randomUUID } from 'node:crypto';
 import { withTransaction } from '../../db';
 import { logger } from '../../logger';
 import { hashPassword, verifyPassword } from '../../utils/password';
@@ -20,26 +19,35 @@ import {
   refreshTokenExpiryDate,
 } from '../../utils/jwt';
 import { sha256 } from '../../utils/hash';
+import { createAndSendOtp, verifyOtp } from '../../utils/otp';
 import { record, AuditAction } from '../audit/audit.service';
-import { authRepository, type UserRow } from './auth.repository';
+import { authRepository, type UserRow, type UserRole } from './auth.repository';
 import {
   AccountSuspendedError,
-  EmailTakenError,
   InvalidCredentialsError,
   PhoneTakenError,
   TokenExpiredError,
   TokenInvalidError,
   TokenReusedError,
 } from './auth.errors';
-import type { LoginInput, RefreshInput, RegisterInput } from './auth.schemas';
+import { AppError } from '../../errors';
+import type {
+  ForgotPasswordInput,
+  LoginInput,
+  RefreshInput,
+  RegisterInput,
+  ResetPasswordInput,
+  VerifyPhoneInput,
+} from './auth.schemas';
 
 export interface PublicUser {
   id: string;
+  phone: string;
   email: string | null;
-  phone: string | null;
   fullName: string;
-  role: 'SAVER' | 'ADMIN';
+  role: UserRole;
   status: 'PENDING' | 'VERIFIED' | 'SUSPENDED';
+  phoneVerified: boolean;
   createdAt: string;
 }
 
@@ -61,11 +69,12 @@ export interface RequestMeta {
 function toPublicUser(row: UserRow): PublicUser {
   return {
     id: row.id,
-    email: row.email,
     phone: row.phone,
+    email: row.email,
     fullName: row.full_name,
     role: row.role,
     status: row.status,
+    phoneVerified: row.phone_verified_at !== null,
     createdAt: row.created_at.toISOString(),
   };
 }
@@ -74,77 +83,110 @@ function assertNotSuspended(user: UserRow): void {
   if (user.status === 'SUSPENDED') throw new AccountSuspendedError();
 }
 
-export class AuthService {
-  async register(input: RegisterInput, meta: RequestMeta): Promise<AuthResult> {
-    if (input.email && (await authRepository.emailExists(input.email))) {
-      throw new EmailTakenError();
-    }
+function assertPhoneVerified(user: UserRow): void {
+  if (!user.phone_verified_at) {
+    throw new AppError({
+      code: 'AUTH_PHONE_NOT_VERIFIED',
+      httpStatus: 403,
+      message: 'Phone number is not verified',
+    });
+  }
+}
 
-    if (input.phone && (await authRepository.phoneExists(input.phone))) {
+export class AuthService {
+  async register(
+    input: RegisterInput,
+    meta: RequestMeta,
+  ): Promise<{ userId: string; phone: string; otpSent: boolean }> {
+    if (await authRepository.phoneExists(input.phone)) {
       throw new PhoneTakenError();
     }
 
     const passwordHash = await hashPassword(input.password);
+    const isAdminPhone = !!process.env.ADMIN_PHONE && process.env.ADMIN_PHONE === input.phone;
+    const role: UserRole = isAdminPhone ? 'ADMIN' : 'SAVER';
 
-    const result = await withTransaction(async (tx) => {
-      const user = await authRepository.insertUser(
+    const user = await withTransaction(async (tx) => {
+      const u = await authRepository.insertUser(
         {
+          phone: input.phone,
           email: input.email ?? null,
-          phone: input.phone ?? null,
           passwordHash,
           fullName: input.fullName,
+          role,
         },
         tx,
       );
-
-      const tokens = await this.issueTokens(user, meta, tx);
-
       await record(
         {
-          actorId: user.id,
+          actorId: u.id,
           action: AuditAction.USER_REGISTERED,
           entityType: 'user',
-          entityId: user.id,
+          entityId: u.id,
           ipAddress: meta.ipAddress,
           userAgent: meta.userAgent,
-          metadata: { email: user.email, phone: user.phone },
+          metadata: { phone: u.phone, role: u.role },
         },
         tx,
       );
-
-      return { user, tokens };
+      return u;
     });
 
-    logger.info({ userId: result.user.id }, 'User registered');
+    const otpResult = await createAndSendOtp(input.phone, 'signup', meta.ipAddress);
+    logger.info({ userId: user.id, phone: user.phone }, 'User registered, OTP dispatched');
 
-    return {
-      user: toPublicUser(result.user),
-      tokens: result.tokens,
-    };
+    return { userId: user.id, phone: user.phone, otpSent: otpResult.ok };
+  }
+
+  async verifyPhone(input: VerifyPhoneInput, meta: RequestMeta): Promise<AuthResult> {
+    const user = await authRepository.findUserByPhone(input.phone);
+    if (!user) throw new InvalidCredentialsError();
+    assertNotSuspended(user);
+
+    const verify = await verifyOtp(input.phone, 'signup', input.code);
+    if (!verify.ok) {
+      throw new AppError({
+        code: 'AUTH_OTP_INVALID',
+        httpStatus: 400,
+        message: verify.error ?? 'Invalid or expired code',
+      });
+    }
+
+    const updated = await authRepository.markPhoneVerified(user.id);
+    const tokens = await withTransaction(async (tx) => {
+      const t = await this.issueTokens(updated, meta, tx);
+      await record(
+        {
+          actorId: updated.id,
+          action: 'PHONE_VERIFIED',
+          entityType: 'user',
+          entityId: updated.id,
+          ipAddress: meta.ipAddress,
+          userAgent: meta.userAgent,
+        },
+        tx,
+      );
+      return t;
+    });
+
+    return { user: toPublicUser(updated), tokens };
   }
 
   async login(input: LoginInput, meta: RequestMeta): Promise<AuthResult> {
-    const user = await authRepository.findUserByEmailOrPhone(input.email, input.phone);
-
+    const user = await authRepository.findUserByPhone(input.phone);
     if (!user) {
       await record({
         actorId: null,
         action: AuditAction.LOGIN_FAILED,
         entityType: 'user',
-        metadata: {
-          email: input.email,
-          phone: input.phone,
-          reason: 'user_not_found',
-        },
+        metadata: { phone: input.phone, reason: 'user_not_found' },
         ipAddress: meta.ipAddress,
         userAgent: meta.userAgent,
       });
-
       throw new InvalidCredentialsError();
     }
 
     const passwordOk = await verifyPassword(input.password, user.password_hash);
-
     if (!passwordOk) {
       await record({
         actorId: user.id,
@@ -155,15 +197,14 @@ export class AuthService {
         ipAddress: meta.ipAddress,
         userAgent: meta.userAgent,
       });
-
       throw new InvalidCredentialsError();
     }
 
     assertNotSuspended(user);
+    assertPhoneVerified(user);
 
     const tokens = await withTransaction(async (tx) => {
-      const issuedTokens = await this.issueTokens(user, meta, tx);
-
+      const t = await this.issueTokens(user, meta, tx);
       await record(
         {
           actorId: user.id,
@@ -175,116 +216,127 @@ export class AuthService {
         },
         tx,
       );
-
-      return issuedTokens;
+      return t;
     });
 
-    logger.info({ userId: user.id }, 'User logged in');
-
-    return {
-      user: toPublicUser(user),
-      tokens,
-    };
+    return { user: toPublicUser(user), tokens };
   }
 
-  async refresh(input: RefreshInput, meta: RequestMeta): Promise<AuthResult> {
-    // 1. Verify JWT signature + type.
-    let payload;
-
-    try {
-      payload = verifyRefreshToken(input.refreshToken);
-    } catch (err) {
-      if (err instanceof Error && err.name === 'TokenExpiredError') {
-        throw new TokenExpiredError();
-      }
-
-      throw new TokenInvalidError();
-    }
-
-    // 2. Find the database record by its hash.
-    const tokenHash = sha256(input.refreshToken);
-    const record_ = await authRepository.findRefreshTokenByHash(tokenHash);
-
-    if (!record_) {
-      throw new TokenInvalidError('Refresh token not recognised');
-    }
-
-    // 3. Reuse detection — an already-revoked token implies possible theft.
-    if (record_.revoked_at) {
-      logger.warn(
-        { userId: record_.user_id },
-        'Refresh token reuse detected — revoking all',
-      );
-
-      await authRepository.revokeAllUserTokens(record_.user_id);
-
-      await record({
-        actorId: record_.user_id,
-        action: AuditAction.TOKEN_REUSED,
-        entityType: 'refresh_token',
-        entityId: record_.id,
-        ipAddress: meta.ipAddress,
-        userAgent: meta.userAgent,
-      });
-
-      throw new TokenReusedError();
-    }
-
-    // 4. Check persisted expiry as well as JWT expiry.
-    if (record_.expires_at.getTime() < Date.now()) {
-      throw new TokenExpiredError();
-    }
-
-    // 5. Load the user and check account status.
-    const user = await authRepository.findUserById(payload.sub);
-
+  async forgotPassword(input: ForgotPasswordInput, meta: RequestMeta): Promise<{ ok: true }> {
+    const user = await authRepository.findUserByPhone(input.phone);
+    // Always return ok to prevent user enumeration
     if (!user) {
-      throw new TokenInvalidError('User no longer exists');
+      logger.warn({ phone: input.phone }, 'forgot-password for unknown phone');
+      return { ok: true };
+    }
+    if (user.status === 'SUSPENDED') {
+      logger.warn({ userId: user.id }, 'forgot-password for suspended user');
+      return { ok: true };
     }
 
-    assertNotSuspended(user);
+    await createAndSendOtp(input.phone, 'reset', meta.ipAddress);
+    logger.info({ userId: user.id }, 'Password reset OTP dispatched');
+    return { ok: true };
+  }
 
-    // 6. Rotate: issue a replacement, then revoke and link the old token.
-    const result = await withTransaction(async (tx) => {
-      const newTokens = await this.issueTokens(user, meta, tx);
-      const newHash = sha256(newTokens.refreshToken);
-      const newRow = await authRepository.findRefreshTokenByHash(newHash);
+  async resetPassword(input: ResetPasswordInput, meta: RequestMeta): Promise<{ ok: true }> {
+    const user = await authRepository.findUserByPhone(input.phone);
+    if (!user) throw new InvalidCredentialsError();
 
-      await authRepository.revokeRefreshToken(record_.id, newRow?.id ?? null, tx);
+    const verify = await verifyOtp(input.phone, 'reset', input.code);
+    if (!verify.ok) {
+      throw new AppError({
+        code: 'AUTH_OTP_INVALID',
+        httpStatus: 400,
+        message: verify.error ?? 'Invalid or expired code',
+      });
+    }
 
+    const passwordHash = await hashPassword(input.newPassword);
+    await withTransaction(async (tx) => {
+      await authRepository.updatePassword(user.id, passwordHash);
       await record(
         {
           actorId: user.id,
-          action: AuditAction.TOKEN_REFRESHED,
-          entityType: 'refresh_token',
-          entityId: record_.id,
+          action: 'PASSWORD_RESET',
+          entityType: 'user',
+          entityId: user.id,
           ipAddress: meta.ipAddress,
           userAgent: meta.userAgent,
         },
         tx,
       );
+    });
 
+    // Revoke all existing sessions after password reset
+    await authRepository.revokeAllUserTokens(user.id);
+
+    logger.info({ userId: user.id }, 'Password reset complete, sessions revoked');
+    return { ok: true };
+  }
+
+  async refresh(input: RefreshInput, meta: RequestMeta): Promise<AuthResult> {
+    let payload;
+    try {
+      payload = verifyRefreshToken(input.refreshToken);
+    } catch (err) {
+      if (err instanceof Error && err.name === 'TokenExpiredError') throw new TokenExpiredError();
+      throw new TokenInvalidError();
+    }
+
+    const tokenHash = sha256(input.refreshToken);
+    const existing = await authRepository.findRefreshTokenByHash(tokenHash);
+    if (!existing) throw new TokenInvalidError('Refresh token not recognised');
+
+    if (existing.revoked_at) {
+      logger.warn({ userId: existing.user_id }, 'Refresh token reuse detected - revoking all');
+      await authRepository.revokeAllUserTokens(existing.user_id);
+      await record({
+        actorId: existing.user_id,
+        action: AuditAction.TOKEN_REUSED,
+        entityType: 'refresh_token',
+        entityId: existing.id,
+        ipAddress: meta.ipAddress,
+        userAgent: meta.userAgent,
+      });
+      throw new TokenReusedError();
+    }
+
+    if (existing.expires_at.getTime() < Date.now()) throw new TokenExpiredError();
+
+    const user = await authRepository.findUserById(payload.sub);
+    if (!user) throw new TokenInvalidError('User no longer exists');
+    assertNotSuspended(user);
+
+    const result = await withTransaction(async (tx) => {
+      const newTokens = await this.issueTokens(user, meta, tx);
+      const newHash = sha256(newTokens.refreshToken);
+      const newRow = await authRepository.findRefreshTokenByHash(newHash);
+      await authRepository.revokeRefreshToken(existing.id, newRow?.id ?? null, tx);
+      await record(
+        {
+          actorId: user.id,
+          action: AuditAction.TOKEN_REFRESHED,
+          entityType: 'refresh_token',
+          entityId: existing.id,
+          ipAddress: meta.ipAddress,
+          userAgent: meta.userAgent,
+        },
+        tx,
+      );
       return { user, tokens: newTokens };
     });
 
-    return {
-      user: toPublicUser(result.user),
-      tokens: result.tokens,
-    };
+    return { user: toPublicUser(result.user), tokens: result.tokens };
   }
 
   async logout(input: RefreshInput, meta: RequestMeta): Promise<void> {
     const tokenHash = sha256(input.refreshToken);
     const row = await authRepository.findRefreshTokenByHash(tokenHash);
-
-    // Logout is intentionally idempotent.
-    if (!row || row.revoked_at) {
-      return;
-    }
+    if (!row || row.revoked_at) return;
 
     await withTransaction(async (tx) => {
       await authRepository.revokeRefreshToken(row.id, null, tx);
-
       await record(
         {
           actorId: row.user_id,
@@ -298,8 +350,6 @@ export class AuthService {
       );
     });
   }
-
-  // ---- internals ----
 
   private async issueTokens(
     user: UserRow,
@@ -326,6 +376,3 @@ export class AuthService {
 }
 
 export const authService = new AuthService();
-
-// Re-export for convenience
-export { randomUUID };

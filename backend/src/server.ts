@@ -88,7 +88,23 @@ process.on('SIGTERM', () => shutdown('SIGTERM'));
 app.listen(env.PORT, () => {
   logger.info(`ROSCA backend listening on http://localhost:${env.PORT}`);
   logger.info(`Health check: http://localhost:${env.PORT}/health`);
+
   startAllWorkers();
+
+  // Promote ADMIN_PHONE user to ADMIN if registered.
+  void (async () => {
+    if (!env.ADMIN_PHONE) return;
+
+    try {
+      await pool.query(`UPDATE users SET role = 'ADMIN' WHERE phone = $1 AND role != 'ADMIN'`, [
+        env.ADMIN_PHONE,
+      ]);
+
+      logger.info({ adminPhone: env.ADMIN_PHONE }, 'Admin bootstrap checked');
+    } catch (err) {
+      logger.error({ err }, 'Admin bootstrap failed');
+    }
+  })();
 });
 
 void redis;

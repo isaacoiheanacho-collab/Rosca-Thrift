@@ -47,6 +47,21 @@ const EnvSchema = z.object({
   CORS_ORIGINS: z.string().default('http://localhost:3000'),
 
   LOG_LEVEL: z.enum(['fatal', 'error', 'warn', 'info', 'debug', 'trace']).default('info'),
+
+  // TextBee SMS
+  TEXTBEE_API_KEY: z.string().min(1),
+  TEXTBEE_DEVICE_ID: z.string().min(1),
+  TEXTBEE_BASE_URL: z.string().url().default('https://api.textbee.dev/api/v1'),
+
+  // OTP
+  OTP_EXPIRY_MINUTES: z.coerce.number().int().positive().default(10),
+  OTP_MAX_ATTEMPTS: z.coerce.number().int().positive().default(5),
+
+  // Admin bootstrap
+  ADMIN_PHONE: z.string().regex(/^\+[1-9]\d{6,14}$/).optional(),
+
+  // Dev override (optional). In dev, if set, this code works alongside real OTP.
+  DEV_OTP_OVERRIDE: z.string().optional(),
 });
 
 const parsed = EnvSchema.safeParse(process.env);
