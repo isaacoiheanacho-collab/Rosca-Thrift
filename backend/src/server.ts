@@ -12,7 +12,7 @@ import { startAllWorkers, stopAllWorkers } from './queue';
 import { requestId } from './middleware/requestId';
 import { errorHandler, notFoundHandler } from './middleware/errorHandler';
 import { generalLimiter, authLimiter } from './middleware/rateLimit';
-import { authRoutes } from './modules';
+import { adminRoutes, authRoutes, usersRoutes } from './modules';
 
 const app = express();
 
@@ -70,6 +70,8 @@ app.get('/', (_req: Request, res: Response) => {
 });
 
 app.use('/api/auth', authLimiter, authRoutes);
+app.use('/api/users', usersRoutes);
+app.use('/api/admin', adminRoutes);
 
 app.use(notFoundHandler);
 app.use(errorHandler);
