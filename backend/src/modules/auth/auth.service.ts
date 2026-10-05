@@ -1,12 +1,15 @@
 /**
- * Auth service - phone-first with OTP.
+ * Auth service — phone-first with OTP and branch assignment.
  *
  * Flow:
- *  1. register(phone, password, fullName) → creates user (PENDING) + sends OTP
+ *  1. register(phone, password, fullName, branchSlug?) → creates user + sends OTP
+ *     - If phone matches SUPER_ADMIN_PHONE: role=SUPER_ADMIN, no branch
+ *     - Otherwise: branchSlug required, role=SAVER, user assigned to that branch
  *  2. verifyPhone(phone, code) → marks phone_verified_at, status=VERIFIED → returns tokens
- *  3. login(phone, password) → if not verified, requires verify-phone first
+ *  3. login(phone, password) → requires phone verification
  *  4. forgotPassword(phone) → sends reset OTP
  *  5. resetPassword(phone, code, newPassword) → changes password, revokes all sessions
+ *  6. refresh / logout as before
  */
 
 import { withTransaction } from '../../db';
@@ -21,6 +24,7 @@ import {
 import { sha256 } from '../../utils/hash';
 import { createAndSendOtp, verifyOtp } from '../../utils/otp';
 import { record, AuditAction } from '../audit/audit.service';
+import { branchesRepository } from '../branches/branches.repository';
 import { authRepository, type UserRow, type UserRole } from './auth.repository';
 import {
   AccountSuspendedError,
@@ -46,6 +50,7 @@ export interface PublicUser {
   email: string | null;
   fullName: string;
   role: UserRole;
+  branchId: string | null;
   status: 'PENDING' | 'VERIFIED' | 'SUSPENDED';
   phoneVerified: boolean;
   createdAt: string;
@@ -73,6 +78,7 @@ function toPublicUser(row: UserRow): PublicUser {
     email: row.email,
     fullName: row.full_name,
     role: row.role,
+    branchId: row.branch_id,
     status: row.status,
     phoneVerified: row.phone_verified_at !== null,
     createdAt: row.created_at.toISOString(),
@@ -102,9 +108,44 @@ export class AuthService {
       throw new PhoneTakenError();
     }
 
+    // Determine role + branch
+    const isSuperAdmin =
+      !!process.env.SUPER_ADMIN_PHONE && process.env.SUPER_ADMIN_PHONE === input.phone;
+
+    let role: UserRole;
+    let branchId: string | null = null;
+
+    if (isSuperAdmin) {
+      role = 'SUPER_ADMIN';
+      branchId = null;
+    } else {
+      if (!input.branchSlug) {
+        throw new AppError({
+          code: 'AUTH_BRANCH_REQUIRED',
+          httpStatus: 400,
+          message: 'branchSlug is required for non-admin registration',
+        });
+      }
+      const branch = await branchesRepository.findBySlug(input.branchSlug);
+      if (!branch) {
+        throw new AppError({
+          code: 'AUTH_BRANCH_NOT_FOUND',
+          httpStatus: 404,
+          message: 'Branch not found',
+        });
+      }
+      if (branch.status !== 'ACTIVE') {
+        throw new AppError({
+          code: 'AUTH_BRANCH_INACTIVE',
+          httpStatus: 403,
+          message: 'Branch is not active',
+        });
+      }
+      role = 'SAVER';
+      branchId = branch.id;
+    }
+
     const passwordHash = await hashPassword(input.password);
-    const isAdminPhone = !!process.env.ADMIN_PHONE && process.env.ADMIN_PHONE === input.phone;
-    const role: UserRole = isAdminPhone ? 'ADMIN' : 'SAVER';
 
     const user = await withTransaction(async (tx) => {
       const u = await authRepository.insertUser(
@@ -114,6 +155,7 @@ export class AuthService {
           passwordHash,
           fullName: input.fullName,
           role,
+          branchId,
         },
         tx,
       );
@@ -125,7 +167,7 @@ export class AuthService {
           entityId: u.id,
           ipAddress: meta.ipAddress,
           userAgent: meta.userAgent,
-          metadata: { phone: u.phone, role: u.role },
+          metadata: { phone: u.phone, role: u.role, branchId: u.branch_id },
         },
         tx,
       );
@@ -133,7 +175,10 @@ export class AuthService {
     });
 
     const otpResult = await createAndSendOtp(input.phone, 'signup', meta.ipAddress);
-    logger.info({ userId: user.id, phone: user.phone }, 'User registered, OTP dispatched');
+    logger.info(
+      { userId: user.id, phone: user.phone, role: user.role },
+      'User registered, OTP dispatched',
+    );
 
     return { userId: user.id, phone: user.phone, otpSent: otpResult.ok };
   }
@@ -224,7 +269,6 @@ export class AuthService {
 
   async forgotPassword(input: ForgotPasswordInput, meta: RequestMeta): Promise<{ ok: true }> {
     const user = await authRepository.findUserByPhone(input.phone);
-    // Always return ok to prevent user enumeration
     if (!user) {
       logger.warn({ phone: input.phone }, 'forgot-password for unknown phone');
       return { ok: true };
@@ -268,9 +312,7 @@ export class AuthService {
       );
     });
 
-    // Revoke all existing sessions after password reset
     await authRepository.revokeAllUserTokens(user.id);
-
     logger.info({ userId: user.id }, 'Password reset complete, sessions revoked');
     return { ok: true };
   }
@@ -356,8 +398,8 @@ export class AuthService {
     meta: RequestMeta,
     tx: Parameters<Parameters<typeof withTransaction>[0]>[0],
   ): Promise<AuthTokens> {
-    const accessToken = signAccessToken(user.id, user.role);
-    const refreshToken = signRefreshToken(user.id, user.role);
+    const accessToken = signAccessToken(user.id, user.role, user.branch_id);
+    const refreshToken = signRefreshToken(user.id, user.role, user.branch_id);
     const tokenHash = sha256(refreshToken);
 
     await authRepository.insertRefreshToken(

@@ -48,6 +48,10 @@ const EnvSchema = z.object({
 
   LOG_LEVEL: z.enum(['fatal', 'error', 'warn', 'info', 'debug', 'trace']).default('info'),
 
+  // Tenant and branch configuration
+  MAX_TENANTS: z.coerce.number().int().positive().default(50),
+  BRANCH_JOIN_BASE_URL: z.string().url().default('http://localhost:3000/join'),
+
   // TextBee SMS
   TEXTBEE_API_KEY: z.string().min(1),
   TEXTBEE_DEVICE_ID: z.string().min(1),
@@ -57,8 +61,8 @@ const EnvSchema = z.object({
   OTP_EXPIRY_MINUTES: z.coerce.number().int().positive().default(10),
   OTP_MAX_ATTEMPTS: z.coerce.number().int().positive().default(5),
 
-  // Admin bootstrap
-  ADMIN_PHONE: z.string().regex(/^\+[1-9]\d{6,14}$/).optional(),
+  // Super-admin bootstrap
+  SUPER_ADMIN_PHONE: z.string().regex(/^\+[1-9]\d{6,14}$/).optional(),
 
   // Dev override (optional). In dev, if set, this code works alongside real OTP.
   DEV_OTP_OVERRIDE: z.string().optional(),

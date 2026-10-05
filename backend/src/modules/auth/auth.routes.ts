@@ -1,7 +1,7 @@
 /**
  * Auth routes - phone-first.
  *
- *   POST /api/auth/register        - create account, sends OTP
+ *   POST /api/auth/register          - create account, sends OTP
  *   POST /api/auth/verify-phone    - confirm OTP, returns tokens
  *   POST /api/auth/login           - phone + password
  *   POST /api/auth/refresh         - rotate refresh token

@@ -1,12 +1,12 @@
 /**
- * Auth repository - all SQL for the auth module.
+ * Auth repository — all SQL for the auth module.
  * Phone is the primary identifier.
  */
 
 import type { PoolClient } from 'pg';
 import { pool } from '../../db';
 
-export type UserRole = 'SAVER' | 'ADMIN';
+export type UserRole = 'SUPER_ADMIN' | 'BRANCH_ADMIN' | 'SAVER';
 export type UserStatus = 'PENDING' | 'VERIFIED' | 'SUSPENDED';
 
 export interface UserRow {
@@ -16,9 +16,11 @@ export interface UserRow {
   password_hash: string;
   full_name: string;
   role: UserRole;
+  branch_id: string | null;
   status: UserStatus;
   phone_verified_at: Date | null;
   email_verified_at: Date | null;
+  kyc_verified_at: Date | null;
   created_at: Date;
   updated_at: Date;
 }
@@ -60,14 +62,22 @@ export class AuthRepository {
       passwordHash: string;
       fullName: string;
       role: UserRole;
+      branchId: string | null;
     },
     tx: PoolClient,
   ): Promise<UserRow> {
     const result = await tx.query<UserRow>(
-      `INSERT INTO users (phone, email, password_hash, full_name, role)
-       VALUES ($1, $2, $3, $4, $5)
+      `INSERT INTO users (phone, email, password_hash, full_name, role, branch_id)
+       VALUES ($1, $2, $3, $4, $5, $6)
        RETURNING *`,
-      [data.phone, data.email, data.passwordHash, data.fullName, data.role],
+      [
+        data.phone,
+        data.email,
+        data.passwordHash,
+        data.fullName,
+        data.role,
+        data.branchId,
+      ],
     );
     return result.rows[0]!;
   }
@@ -87,12 +97,14 @@ export class AuthRepository {
     await pool.query('UPDATE users SET password_hash = $1 WHERE id = $2', [passwordHash, userId]);
   }
 
-  async promoteIfAdminPhone(phone: string): Promise<void> {
-    const adminPhone = process.env.ADMIN_PHONE;
-    if (!adminPhone || adminPhone !== phone) return;
-    await pool.query(`UPDATE users SET role = 'ADMIN' WHERE phone = $1 AND role != 'ADMIN'`, [
-      phone,
-    ]);
+  async promoteIfSuperAdminPhone(phone: string): Promise<void> {
+    const superPhone = process.env.SUPER_ADMIN_PHONE;
+    if (!superPhone || superPhone !== phone) return;
+    await pool.query(
+      `UPDATE users SET role = 'SUPER_ADMIN', branch_id = NULL
+       WHERE phone = $1 AND role != 'SUPER_ADMIN'`,
+      [phone],
+    );
   }
 
   // ---- Refresh tokens ----

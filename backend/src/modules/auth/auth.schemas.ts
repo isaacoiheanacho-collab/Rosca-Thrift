@@ -1,8 +1,9 @@
 /**
- * Auth schemas - phone-first.
+ * Auth schemas - phone-first with optional branch assignment.
  *
- * Registration is phone + password. Email is optional (kept for future use).
- * OTP is sent automatically on register; user must verify before login works.
+ * Registration:
+ *   - SUPER_ADMIN_PHONE matching phone → no branchSlug needed, role=SUPER_ADMIN
+ *   - Everyone else → branchSlug required, role=SAVER, branch assigned
  */
 
 import { z } from 'zod';
@@ -32,11 +33,21 @@ const OtpCodeSchema = z
   .trim()
   .regex(/^\d{6}$/, 'Code must be 6 digits');
 
+const BranchSlugSchema = z
+  .string()
+  .trim()
+  .toLowerCase()
+  .regex(
+    /^[a-z0-9][a-z0-9-]*[a-z0-9]$/,
+    'Branch slug must be lowercase alphanumeric with dashes (no leading/trailing dash)',
+  );
+
 export const RegisterSchema = z.object({
   phone: PhoneSchema,
   password: PasswordSchema,
   fullName: FullNameSchema,
   email: EmailSchema.optional(),
+  branchSlug: BranchSlugSchema.optional(),
 });
 
 export const VerifyPhoneSchema = z.object({

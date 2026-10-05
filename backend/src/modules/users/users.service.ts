@@ -31,7 +31,8 @@ export interface PublicUser {
   phone: string;
   email: string | null;
   fullName: string;
-  role: 'SAVER' | 'ADMIN';
+  role: 'SUPER_ADMIN' | 'BRANCH_ADMIN' | 'SAVER';
+  branchId: string | null;
   status: 'PENDING' | 'VERIFIED' | 'SUSPENDED';
   phoneVerified: boolean;
   createdAt: string;
@@ -44,6 +45,7 @@ export function toPublicUser(row: UserRow): PublicUser {
     email: row.email,
     fullName: row.full_name,
     role: row.role,
+    branchId: row.branch_id,
     status: row.status,
     phoneVerified: row.phone_verified_at !== null,
     createdAt: row.created_at.toISOString(),

@@ -12,7 +12,13 @@ import { startAllWorkers, stopAllWorkers } from './queue';
 import { requestId } from './middleware/requestId';
 import { errorHandler, notFoundHandler } from './middleware/errorHandler';
 import { generalLimiter, authLimiter } from './middleware/rateLimit';
-import { adminRoutes, authRoutes, usersRoutes } from './modules';
+import {
+  authRoutes,
+  usersRoutes,
+  publicBranchesRouter,
+  superAdminBranchesRouter,
+  branchTrustAccountRouter,
+} from './modules';
 
 const app = express();
 
@@ -71,7 +77,9 @@ app.get('/', (_req: Request, res: Response) => {
 
 app.use('/api/auth', authLimiter, authRoutes);
 app.use('/api/users', usersRoutes);
-app.use('/api/admin', adminRoutes);
+app.use('/api/branches', publicBranchesRouter);
+app.use('/api/branches', branchTrustAccountRouter);
+app.use('/api/super-admin/branches', superAdminBranchesRouter);
 
 app.use(notFoundHandler);
 app.use(errorHandler);
@@ -93,18 +101,18 @@ app.listen(env.PORT, () => {
 
   startAllWorkers();
 
-  // Promote ADMIN_PHONE user to ADMIN if registered.
+  // Promote SUPER_ADMIN_PHONE user if registered
   void (async () => {
-    if (!env.ADMIN_PHONE) return;
-
+    if (!env.SUPER_ADMIN_PHONE) return;
     try {
-      await pool.query(`UPDATE users SET role = 'ADMIN' WHERE phone = $1 AND role != 'ADMIN'`, [
-        env.ADMIN_PHONE,
-      ]);
-
-      logger.info({ adminPhone: env.ADMIN_PHONE }, 'Admin bootstrap checked');
+      await pool.query(
+        `UPDATE users SET role = 'SUPER_ADMIN', branch_id = NULL
+         WHERE phone = $1 AND role != 'SUPER_ADMIN'`,
+        [env.SUPER_ADMIN_PHONE],
+      );
+      logger.info({ superAdminPhone: env.SUPER_ADMIN_PHONE }, 'Super admin bootstrap checked');
     } catch (err) {
-      logger.error({ err }, 'Admin bootstrap failed');
+      logger.error({ err }, 'Super admin bootstrap failed');
     }
   })();
 });
