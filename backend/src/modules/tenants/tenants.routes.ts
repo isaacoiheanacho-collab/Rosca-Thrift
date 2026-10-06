@@ -1,26 +1,29 @@
 /**
- * Tenants routes (Phase 1.4a — read-only + status change).
+ * Tenants routes.
  *
  * Saver:
  *   GET /api/tenants/me                 - my current tenant + members
  *
  * Branch Admin:
- *   GET   /api/branch-admin/tenants                          - list tenants in my branch
- *   GET   /api/branch-admin/tenants/:id                      - view one
- *   PATCH /api/branch-admin/tenants/:id/status               - change status
+ *   GET   /api/branch-admin/tenants                    - list tenants in my branch
+ *   GET   /api/branch-admin/tenants/:id                - view one
+ *   PATCH /api/branch-admin/tenants/:id/status         - change status
  *
  * Super Admin:
- *   GET   /api/super-admin/tenants/by-branch/:branchId       - list tenants in any branch
- *   GET   /api/super-admin/tenants/:id                       - view one
- *   PATCH /api/super-admin/tenants/:id/status                - change status
+ *   GET   /api/super-admin/tenants/by-branch/:branchId - list tenants in a branch
+ *   GET   /api/super-admin/tenants/:id                 - view one
+ *   PATCH /api/super-admin/tenants/:id/status          - change status
+ *   POST  /api/super-admin/tenants/provision/:userId   - manually provision a user
  */
 
 import { Router, type Request, type Response, type NextFunction } from 'express';
 import { z } from 'zod';
 import { requireAuth, requireSuperAdmin, requireBranchAdmin } from '../../middleware/auth';
 import { validate } from '../../middleware/validate';
-import { AppError } from '../../errors';
+import { AppError, NotFoundError } from '../../errors';
 import { tenantsService, type RequestMeta } from './tenants.service';
+import { provisioningService } from './provisioning.service';
+import { usersRepository } from '../users/users.repository';
 import { ListTenantsQuerySchema, UpdateTenantStatusSchema } from './tenants.schemas';
 
 function metaOf(req: Request): RequestMeta {
@@ -124,6 +127,30 @@ superAdminTenantsRouter.get(
       const q = req.query as unknown as z.infer<typeof ListTenantsQuerySchema>;
       const result = await tenantsService.listByBranch(String(req.params.branchId), q);
       res.json({ ok: true, data: { ...result, limit: q.limit, offset: q.offset } });
+    } catch (err) {
+      next(err);
+    }
+  },
+);
+
+superAdminTenantsRouter.post(
+  '/provision/:userId',
+  async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const user = await usersRepository.findById(String(req.params.userId));
+      if (!user) throw new NotFoundError('User');
+      if (!user.branch_id) {
+        throw new AppError({
+          code: 'PROVISION_NO_BRANCH',
+          httpStatus: 400,
+          message: 'User is not assigned to a branch',
+        });
+      }
+      const result = await provisioningService.provisionUserToTenant(
+        user.id,
+        user.branch_id,
+      );
+      res.json({ ok: true, data: result });
     } catch (err) {
       next(err);
     }

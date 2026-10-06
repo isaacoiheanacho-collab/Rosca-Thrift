@@ -1,8 +1,8 @@
 /**
  * KYC service — submission (saver) + review (branch admin).
  *
- * Branch scope is enforced in the routes layer; this service trusts the
- * caller already verified the branch relationship.
+ * On approval: user's kyc_verified_at is set AND they are auto-provisioned
+ * into a tenant in their branch (Phase 1.4b).
  */
 
 import { getPresignedDownloadUrl, uploadObject } from '../../utils/s3';
@@ -10,6 +10,7 @@ import { logger } from '../../logger';
 import { AppError, ConflictError, NotFoundError } from '../../errors';
 import { record } from '../audit/audit.service';
 import { usersRepository } from '../users/users.repository';
+import { provisioningService } from '../tenants/provisioning.service';
 import { kycRepository, type KycSubmissionRow } from './kyc.repository';
 import type { SubmitKycInput } from './kyc.schemas';
 
@@ -154,6 +155,27 @@ export class KycService {
     });
 
     logger.info({ submissionId, reviewerId, branchId: row.branch_id }, 'KYC approved');
+
+    // Auto-provision into a tenant (idempotent — safe to re-run)
+    try {
+      const result = await provisioningService.provisionUserToTenant(
+        row.user_id,
+        row.branch_id,
+      );
+      logger.info(
+        {
+          userId: row.user_id,
+          tenantId: result.tenantId,
+          slot: result.slotNumber,
+          activated: result.tenantActivated,
+        },
+        'User auto-provisioned to tenant after KYC approval',
+      );
+    } catch (err) {
+      // Log but don't fail the KYC approval — provisioning can be retried manually
+      logger.error({ err, userId: row.user_id }, 'Auto-provisioning failed after KYC approval');
+    }
+
     return toDto(updated);
   }
 
