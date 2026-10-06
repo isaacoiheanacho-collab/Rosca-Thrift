@@ -18,6 +18,9 @@ import {
   publicBranchesRouter,
   superAdminBranchesRouter,
   branchTrustAccountRouter,
+  kycRouter,
+  branchAdminKycRouter,
+  superAdminKycRouter,
 } from './modules';
 
 const app = express();
@@ -31,7 +34,6 @@ app.use(generalLimiter);
 
 app.use((req: Request, res: Response, next) => {
   const start = Date.now();
-
   res.on('finish', () => {
     req.log.info(
       {
@@ -43,19 +45,12 @@ app.use((req: Request, res: Response, next) => {
       'request',
     );
   });
-
   next();
 });
 
 app.get('/health', async (_req: Request, res: Response) => {
-  const [db, cache, storage] = await Promise.all([
-    testConnection(),
-    testRedis(),
-    testS3(),
-  ]);
-
+  const [db, cache, storage] = await Promise.all([testConnection(), testRedis(), testS3()]);
   const ok = db.ok && cache.ok && storage.ok;
-
   res.status(ok ? 200 : 503).json({
     ok,
     service: 'rosca-backend',
@@ -80,15 +75,16 @@ app.use('/api/users', usersRoutes);
 app.use('/api/branches', publicBranchesRouter);
 app.use('/api/branches', branchTrustAccountRouter);
 app.use('/api/super-admin/branches', superAdminBranchesRouter);
+app.use('/api/kyc', kycRouter);
+app.use('/api/branch-admin/kyc', branchAdminKycRouter);
+app.use('/api/super-admin/kyc', superAdminKycRouter);
 
 app.use(notFoundHandler);
 app.use(errorHandler);
 
 async function shutdown(signal: string): Promise<void> {
   logger.info(`Received ${signal}, shutting down...`);
-
   await Promise.allSettled([stopAllWorkers(), pool.end(), closeRedis()]);
-
   process.exit(0);
 }
 
@@ -98,10 +94,8 @@ process.on('SIGTERM', () => shutdown('SIGTERM'));
 app.listen(env.PORT, () => {
   logger.info(`ROSCA backend listening on http://localhost:${env.PORT}`);
   logger.info(`Health check: http://localhost:${env.PORT}/health`);
-
   startAllWorkers();
 
-  // Promote SUPER_ADMIN_PHONE user if registered
   void (async () => {
     if (!env.SUPER_ADMIN_PHONE) return;
     try {

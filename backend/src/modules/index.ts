@@ -5,3 +5,8 @@ export {
   superAdminBranchesRouter,
   branchTrustAccountRouter,
 } from './branches/branches.routes';
+export {
+  kycRouter,
+  branchAdminKycRouter,
+  superAdminKycRouter,
+} from './kyc/kyc.routes';

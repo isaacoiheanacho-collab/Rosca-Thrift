@@ -13,7 +13,8 @@
     "start": "node dist/server.js",
     "typecheck": "tsc --noEmit",
     "migrate": "ts-node --transpile-only src/migrate.ts",
-    "smoke": "ts-node --transpile-only scripts/smoke-test.ts"
+    "smoke": "ts-node --transpile-only scripts/smoke-test.ts",
+    "test:kyc": "ts-node --transpile-only scripts/test-kyc.ts"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.1146.0",
