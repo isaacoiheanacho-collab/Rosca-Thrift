@@ -21,6 +21,9 @@ import {
   kycRouter,
   branchAdminKycRouter,
   superAdminKycRouter,
+  tenantsRouter,
+  branchAdminTenantsRouter,
+  superAdminTenantsRouter,
 } from './modules';
 
 const app = express();
@@ -78,6 +81,9 @@ app.use('/api/super-admin/branches', superAdminBranchesRouter);
 app.use('/api/kyc', kycRouter);
 app.use('/api/branch-admin/kyc', branchAdminKycRouter);
 app.use('/api/super-admin/kyc', superAdminKycRouter);
+app.use('/api/tenants', tenantsRouter);
+app.use('/api/branch-admin/tenants', branchAdminTenantsRouter);
+app.use('/api/super-admin/tenants', superAdminTenantsRouter);
 
 app.use(notFoundHandler);
 app.use(errorHandler);

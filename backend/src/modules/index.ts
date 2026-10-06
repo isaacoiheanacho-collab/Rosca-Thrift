@@ -10,3 +10,8 @@ export {
   branchAdminKycRouter,
   superAdminKycRouter,
 } from './kyc/kyc.routes';
+export {
+  tenantsRouter,
+  branchAdminTenantsRouter,
+  superAdminTenantsRouter,
+} from './tenants/tenants.routes';
