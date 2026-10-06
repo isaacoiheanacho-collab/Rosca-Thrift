@@ -2,10 +2,12 @@
  * Tenants routes.
  *
  * Saver:
- *   GET /api/tenants/me                 - my current tenant + members
+ *   GET /api/tenants/me                  - my current tenant + members
+ *   GET /api/tenants/me/members          - flat list of members
  *
  * Branch Admin:
- *   GET   /api/branch-admin/tenants                    - list tenants in my branch
+ *   GET   /api/branch-admin/tenants/summary            - counts + list
+ *   GET   /api/branch-admin/tenants                    - list tenants
  *   GET   /api/branch-admin/tenants/:id                - view one
  *   PATCH /api/branch-admin/tenants/:id/status         - change status
  *
@@ -13,7 +15,7 @@
  *   GET   /api/super-admin/tenants/by-branch/:branchId - list tenants in a branch
  *   GET   /api/super-admin/tenants/:id                 - view one
  *   PATCH /api/super-admin/tenants/:id/status          - change status
- *   POST  /api/super-admin/tenants/provision/:userId   - manually provision a user
+ *   POST  /api/super-admin/tenants/provision/:userId   - manual provisioning
  */
 
 import { Router, type Request, type Response, type NextFunction } from 'express';
@@ -43,11 +45,44 @@ tenantsRouter.get('/me', requireAuth, async (req: Request, res: Response, next: 
   }
 });
 
+tenantsRouter.get(
+  '/me/members',
+  requireAuth,
+  async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const members = await tenantsService.listMyMembers(req.user!.sub);
+      res.json({ ok: true, data: members });
+    } catch (err) {
+      next(err);
+    }
+  },
+);
+
 // ---- Branch Admin router ----
 
 export const branchAdminTenantsRouter = Router();
 
 branchAdminTenantsRouter.use(requireBranchAdmin);
+
+branchAdminTenantsRouter.get(
+  '/summary',
+  async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const branchId = req.user!.branchId;
+      if (!branchId) {
+        throw new AppError({
+          code: 'AUTH_BRANCH_REQUIRED',
+          httpStatus: 403,
+          message: 'No branch assigned to this account',
+        });
+      }
+      const summary = await tenantsService.getSummaryForBranch(branchId);
+      res.json({ ok: true, data: summary });
+    } catch (err) {
+      next(err);
+    }
+  },
+);
 
 branchAdminTenantsRouter.get(
   '/',
@@ -146,10 +181,7 @@ superAdminTenantsRouter.post(
           message: 'User is not assigned to a branch',
         });
       }
-      const result = await provisioningService.provisionUserToTenant(
-        user.id,
-        user.branch_id,
-      );
+      const result = await provisioningService.provisionUserToTenant(user.id, user.branch_id);
       res.json({ ok: true, data: result });
     } catch (err) {
       next(err);

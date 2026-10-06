@@ -1,8 +1,7 @@
 /**
  * Tenants service — business logic.
  *
- * Phase 1.4a: read-only + manual status changes.
- * Auto-provisioning + slot assignment comes in Phase 1.4b.
+ * Phase 1.4c: adds member listing + branch summary endpoints.
  */
 
 import { logger } from '../../logger';
@@ -47,6 +46,16 @@ export interface MyTenantDto {
   tenant: TenantDto;
   mySlot: number;
   members: TenantMemberDto[];
+}
+
+export interface BranchSummaryDto {
+  branchId: string;
+  totalTenants: number;
+  filling: number;
+  active: number;
+  completed: number;
+  totalMembers: number;
+  tenants: TenantDto[];
 }
 
 async function toTenantDto(row: TenantRow): Promise<TenantDto> {
@@ -113,6 +122,39 @@ export class TenantsService {
     };
   }
 
+  /** List members of the tenant the current user belongs to. */
+  async listMyMembers(userId: string): Promise<TenantMemberDto[]> {
+    const membership = await tenantsRepository.findMembershipByUser(userId);
+    if (!membership) return [];
+    const memberships = await tenantsRepository.findMembershipsByTenant(membership.tenant_id);
+    return Promise.all(memberships.map((m) => membershipToDto(m, userId)));
+  }
+
+  /** Branch admin summary: counts + list of tenants in their branch. */
+  async getSummaryForBranch(branchId: string): Promise<BranchSummaryDto> {
+    const { tenants } = await tenantsRepository.findByBranch(branchId, {
+      limit: 1000,
+      offset: 0,
+    });
+
+    const dtos = await Promise.all(tenants.map(toTenantDto));
+
+    const filling = dtos.filter((t) => t.status === 'FILLING').length;
+    const active = dtos.filter((t) => t.status === 'ACTIVE').length;
+    const completed = dtos.filter((t) => t.status === 'COMPLETED').length;
+    const totalMembers = dtos.reduce((acc, t) => acc + t.memberCount, 0);
+
+    return {
+      branchId,
+      totalTenants: dtos.length,
+      filling,
+      active,
+      completed,
+      totalMembers,
+      tenants: dtos,
+    };
+  }
+
   async updateStatus(
     tenantId: string,
     status: TenantStatus,
@@ -144,8 +186,6 @@ export class TenantsService {
     logger.info({ tenantId, from: existing.status, to: status }, 'Tenant status changed');
     return toTenantDto(updated);
   }
-
-  // ---- Provisioning (used by Phase 1.4b) ----
 
   async createTenantForBranch(
     branchId: string,
@@ -205,7 +245,6 @@ export class TenantsService {
     return membership;
   }
 
-  // Placeholder for 1.4b — do not use yet
   async pickRandomFreeSlot(tenantId: string): Promise<number> {
     const used = await tenantsRepository.usedSlots(tenantId);
     if (used.length >= 12) {
