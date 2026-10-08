@@ -16,7 +16,8 @@
     "smoke": "ts-node --transpile-only scripts/smoke-test.ts",
     "test:kyc": "ts-node --transpile-only scripts/test-kyc.ts",
     "test:provisioning": "ts-node --transpile-only scripts/test-provisioning.ts",
-    "test:tenants-read": "ts-node --transpile-only scripts/test-tenants-read.ts"
+    "test:tenants-read": "ts-node --transpile-only scripts/test-tenants-read.ts",
+    "test:contribution": "ts-node --transpile-only scripts/test-contribution-flow.ts"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.1146.0",

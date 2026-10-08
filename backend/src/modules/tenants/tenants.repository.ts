@@ -17,6 +17,12 @@ export interface TenantRow {
   completed_at: Date | null;
   created_at: Date;
   updated_at: Date;
+  // Cycle columns (added by migration 011)
+  current_tenure: number;
+  cycle_started_at: Date | null;
+  cycle_ends_at: Date | null;
+  cycle_contribution_deadline_at: Date | null;
+  cycle_payout_at: Date | null;
 }
 
 export interface TenantMembershipRow {

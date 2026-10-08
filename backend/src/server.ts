@@ -24,6 +24,12 @@ import {
   tenantsRouter,
   branchAdminTenantsRouter,
   superAdminTenantsRouter,
+  contributionsRouter,
+  branchAdminContributionsRouter,
+  receiptsRouter,
+  branchAdminPoolAccountRouter,
+  superAdminMaintenanceAccountRouter,
+  superAdminBranchPoolAccountRouter,
 } from './modules';
 
 const app = express();
@@ -54,6 +60,7 @@ app.use((req: Request, res: Response, next) => {
 app.get('/health', async (_req: Request, res: Response) => {
   const [db, cache, storage] = await Promise.all([testConnection(), testRedis(), testS3()]);
   const ok = db.ok && cache.ok && storage.ok;
+
   res.status(ok ? 200 : 503).json({
     ok,
     service: 'rosca-backend',
@@ -84,6 +91,12 @@ app.use('/api/super-admin/kyc', superAdminKycRouter);
 app.use('/api/tenants', tenantsRouter);
 app.use('/api/branch-admin/tenants', branchAdminTenantsRouter);
 app.use('/api/super-admin/tenants', superAdminTenantsRouter);
+app.use('/api/contributions', contributionsRouter);
+app.use('/api/branch-admin/contributions', branchAdminContributionsRouter);
+app.use('/api/receipts', receiptsRouter);
+app.use('/api/branch-admin/pool-account', branchAdminPoolAccountRouter);
+app.use('/api/super-admin/maintenance-account', superAdminMaintenanceAccountRouter);
+app.use('/api/super-admin/branch-pool-account', superAdminBranchPoolAccountRouter);
 
 app.use(notFoundHandler);
 app.use(errorHandler);
@@ -104,6 +117,7 @@ app.listen(env.PORT, () => {
 
   void (async () => {
     if (!env.SUPER_ADMIN_PHONE) return;
+
     try {
       await pool.query(
         `UPDATE users SET role = 'SUPER_ADMIN', branch_id = NULL

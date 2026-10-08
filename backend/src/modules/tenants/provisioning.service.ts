@@ -107,11 +107,18 @@ export class ProvisioningService {
 
       let activated = false;
 
-      // Activate the tenant on the 12th member
+      // Activate the tenant on the 12th member — begin cycle 1
       if (memberCount >= 12 && tenant!.status === 'FILLING') {
         await tx.query(
           `UPDATE tenants
-           SET status = 'ACTIVE', activated_at = NOW()
+           SET status = 'ACTIVE',
+               activated_at = NOW(),
+               current_tenure = 1,
+               current_cycle = 1,
+               cycle_started_at = NOW(),
+               cycle_ends_at = NOW() + INTERVAL '30 days',
+               cycle_contribution_deadline_at = NOW() + INTERVAL '21 days',
+               cycle_payout_at = NOW() + INTERVAL '30 days'
            WHERE id = $1 AND status = 'FILLING'`,
           [tenant!.id],
         );

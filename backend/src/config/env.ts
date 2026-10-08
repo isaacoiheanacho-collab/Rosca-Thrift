@@ -50,6 +50,10 @@ const EnvSchema = z.object({
 
   // Tenant and branch configuration
   MAX_TENANTS: z.coerce.number().int().positive().default(50),
+  CONTRIBUTION_PENCE: z.coerce.number().int().positive().default(100000),
+  CIRCLE_SIZE: z.coerce.number().int().positive().default(12),
+  PLATFORM_FEE_BPS: z.coerce.number().int().positive().default(250),
+  TVOM_ANNUAL_BPS: z.coerce.number().int().positive().default(200),
   BRANCH_JOIN_BASE_URL: z.string().url().default('http://localhost:3000/join'),
 
   // TextBee SMS
