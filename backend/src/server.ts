@@ -26,11 +26,13 @@ import {
   superAdminTenantsRouter,
   contributionsRouter,
   branchAdminContributionsRouter,
+  tenantVisibilityRouter,
   receiptsRouter,
   branchAdminPoolAccountRouter,
   superAdminMaintenanceAccountRouter,
   superAdminBranchPoolAccountRouter,
 } from './modules';
+import authSessionsRouter from './modules/auth/auth.sessions';
 
 const app = express();
 
@@ -60,7 +62,6 @@ app.use((req: Request, res: Response, next) => {
 app.get('/health', async (_req: Request, res: Response) => {
   const [db, cache, storage] = await Promise.all([testConnection(), testRedis(), testS3()]);
   const ok = db.ok && cache.ok && storage.ok;
-
   res.status(ok ? 200 : 503).json({
     ok,
     service: 'rosca-backend',
@@ -80,23 +81,40 @@ app.get('/', (_req: Request, res: Response) => {
   });
 });
 
+// ---- Public / auth ----
 app.use('/api/auth', authLimiter, authRoutes);
+app.use('/api/auth/sessions', generalLimiter, authSessionsRouter);
 app.use('/api/users', usersRoutes);
 app.use('/api/branches', publicBranchesRouter);
 app.use('/api/branches', branchTrustAccountRouter);
-app.use('/api/super-admin/branches', superAdminBranchesRouter);
+
+// ---- KYC ----
 app.use('/api/kyc', kycRouter);
 app.use('/api/branch-admin/kyc', branchAdminKycRouter);
 app.use('/api/super-admin/kyc', superAdminKycRouter);
+
+// ---- Tenants ----
 app.use('/api/tenants', tenantsRouter);
 app.use('/api/branch-admin/tenants', branchAdminTenantsRouter);
 app.use('/api/super-admin/tenants', superAdminTenantsRouter);
+
+// ---- Contributions ----
 app.use('/api/contributions', contributionsRouter);
 app.use('/api/branch-admin/contributions', branchAdminContributionsRouter);
+
+// ---- Tenant-wide visibility (members) ----
+app.use('/api/tenants/me', tenantVisibilityRouter);
+
+// ---- Receipts ----
 app.use('/api/receipts', receiptsRouter);
+
+// ---- Pool accounts / maintenance account ----
 app.use('/api/branch-admin/pool-account', branchAdminPoolAccountRouter);
 app.use('/api/super-admin/maintenance-account', superAdminMaintenanceAccountRouter);
 app.use('/api/super-admin/branch-pool-account', superAdminBranchPoolAccountRouter);
+
+// ---- Super admin branches (must come after specific /api/super-admin paths) ----
+app.use('/api/super-admin/branches', superAdminBranchesRouter);
 
 app.use(notFoundHandler);
 app.use(errorHandler);
@@ -117,7 +135,6 @@ app.listen(env.PORT, () => {
 
   void (async () => {
     if (!env.SUPER_ADMIN_PHONE) return;
-
     try {
       await pool.query(
         `UPDATE users SET role = 'SUPER_ADMIN', branch_id = NULL

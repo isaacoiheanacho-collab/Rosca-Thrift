@@ -1,5 +1,22 @@
 /**
  * Contributions routes.
+ *
+ * Saver:
+ *   GET  /api/contributions/me/current          - get or create current-cycle intent
+ *   GET  /api/contributions/me/intents          - list all my intents
+ *   GET  /api/contributions/me/contributions    - list all my confirmed contributions
+ *   POST /api/contributions/me/receipt          - upload a receipt for an intent
+ *
+ * Branch admin (or super admin):
+ *   GET   /api/branch-admin/contributions/pending              - pending queue with receipts
+ *   POST  /api/branch-admin/contributions/:intentId/confirm    - confirm
+ *   POST  /api/branch-admin/contributions/:intentId/reject     - reject
+ *   GET   /api/branch-admin/contributions/tenants/:tenantId/cycle - cycle status
+ *
+ * Tenant-wide visibility (any member of a tenant):
+ *   GET /api/tenants/me/contributions   - all 12 members' statuses
+ *   GET /api/tenants/me/ledger          - tenant ledger
+ *   GET /api/tenants/me/receipts        - receipt gallery
  */
 
 import { Router, type Request, type Response, type NextFunction } from 'express';
@@ -124,7 +141,7 @@ contributionsRouter.post(
   },
 );
 
-// ---- Admin router ----
+// ---- Branch admin / super admin router ----
 
 export const branchAdminContributionsRouter = Router();
 
@@ -133,9 +150,23 @@ branchAdminContributionsRouter.use(requireBranchAdmin);
 branchAdminContributionsRouter.get(
   '/pending',
   validate({ query: ListPendingSchema }),
-  async (_req: Request, res: Response, next: NextFunction) => {
+  async (req: Request, res: Response, next: NextFunction) => {
     try {
-      res.json({ ok: true, data: { intents: [], limit: 50, offset: 0 } });
+      const q = req.query as unknown as {
+        limit: number;
+        offset: number;
+        tenantId?: string;
+        cycle?: number;
+      };
+      const user = req.user!;
+      // Branch admin → only their branch. Super admin → all branches.
+      const branchFilter = user.role === 'BRANCH_ADMIN' ? user.branchId : null;
+
+      const result = await contributionsService.listPendingForAdmin(branchFilter, {
+        limit: q.limit,
+        offset: q.offset,
+      });
+      res.json({ ok: true, data: { ...result, limit: q.limit, offset: q.offset } });
     } catch (err) {
       next(err);
     }
@@ -189,7 +220,7 @@ branchAdminContributionsRouter.get(
       if (!tenant) {
         throw new AppError({ code: 'NOT_FOUND', httpStatus: 404, message: 'Tenant not found' });
       }
-      if (tenant.branch_id !== req.user!.branchId) {
+      if (req.user!.role === 'BRANCH_ADMIN' && tenant.branch_id !== req.user!.branchId) {
         throw new AppError({ code: 'AUTH_BRANCH_SCOPE', httpStatus: 403, message: 'Not permitted' });
       }
       const status = await contributionsService.listTenantCycleStatus(
@@ -203,3 +234,79 @@ branchAdminContributionsRouter.get(
     }
   },
 );
+
+// ---- Tenant-wide visibility router (any authenticated member) ----
+
+export const tenantVisibilityRouter = Router();
+
+tenantVisibilityRouter.use(requireAuth);
+
+tenantVisibilityRouter.get(
+  '/contributions',
+  async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const membership = await tenantsRepository.findMembershipByUser(req.user!.sub);
+      if (!membership) {
+        throw new AppError({
+          code: 'AUTH_TENANT_SCOPE',
+          httpStatus: 403,
+          message: 'You are not a member of any tenant',
+        });
+      }
+      const tenant = await tenantsRepository.findById(membership.tenant_id);
+      if (!tenant) {
+        throw new AppError({ code: 'NOT_FOUND', httpStatus: 404, message: 'Tenant not found' });
+      }
+      const members = await contributionsService.listTenantCycleMembers(
+        tenant.id,
+        tenant.current_tenure,
+        tenant.current_cycle,
+      );
+      res.json({
+        ok: true,
+        data: {
+          tenantId: tenant.id,
+          cycle: tenant.current_cycle,
+          tenure: tenant.current_tenure,
+          members,
+        },
+      });
+    } catch (err) {
+      next(err);
+    }
+  },
+);
+
+tenantVisibilityRouter.get('/ledger', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const membership = await tenantsRepository.findMembershipByUser(req.user!.sub);
+    if (!membership) {
+      throw new AppError({
+        code: 'AUTH_TENANT_SCOPE',
+        httpStatus: 403,
+        message: 'You are not a member of any tenant',
+      });
+    }
+    const entries = await contributionsService.listTenantLedger(membership.tenant_id, 100);
+    res.json({ ok: true, data: entries });
+  } catch (err) {
+    next(err);
+  }
+});
+
+tenantVisibilityRouter.get('/receipts', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const membership = await tenantsRepository.findMembershipByUser(req.user!.sub);
+    if (!membership) {
+      throw new AppError({
+        code: 'AUTH_TENANT_SCOPE',
+        httpStatus: 403,
+        message: 'You are not a member of any tenant',
+      });
+    }
+    const receipts = await contributionsService.listTenantReceipts(membership.tenant_id, 100);
+    res.json({ ok: true, data: receipts });
+  } catch (err) {
+    next(err);
+  }
+});

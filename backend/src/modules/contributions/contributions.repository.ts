@@ -1,6 +1,6 @@
 /**
  * Contributions repository — all SQL for contribution_intents, contributions,
- * and receipts.
+ * receipts, plus helper queries for admin/tenant visibility.
  */
 
 import type { PoolClient } from 'pg';
@@ -58,6 +58,48 @@ export interface ReceiptRow {
   claimed_reference: string | null;
   claimed_sender_name: string | null;
   claimed_note: string | null;
+  created_at: Date;
+}
+
+export interface TenantCycleMemberRow {
+  membership_id: string;
+  user_id: string;
+  slot_number: number;
+  full_name: string;
+  phone: string;
+  intent_id: string | null;
+  intent_state: 'PENDING' | 'CONFIRMED' | 'LATE' | 'EXEMPT' | null;
+  intent_reference: string | null;
+  intent_deadline_at: Date | null;
+  contribution_id: string | null;
+  contribution_amount: bigint | null;
+  contribution_confirmed_at: Date | null;
+  has_receipt: boolean;
+}
+
+export interface TenantLedgerRow {
+  id: string;
+  entry_type: 'CREDIT' | 'DEBIT';
+  entry_kind: string;
+  amount: bigint;
+  currency: string;
+  reference: string;
+  description: string | null;
+  created_at: Date;
+}
+
+export interface TenantReceiptRow {
+  receipt_id: string;
+  object_key: string;
+  file_name: string;
+  mime_type: string;
+  uploaded_by: string;
+  uploaded_by_name: string;
+  claimed_amount: bigint | null;
+  claimed_reference: string | null;
+  claimed_sender_name: string | null;
+  intent_reference: string | null;
+  contribution_confirmed_at: Date | null;
   created_at: Date;
 }
 
@@ -156,6 +198,51 @@ export class ContributionsRepository {
       [userId],
     );
     return result.rows;
+  }
+
+  /**
+   * Pending verification queue: PENDING or LATE intents with an uploaded
+   * receipt but no contribution yet. If branchId is null, returns all
+   * branches (super admin scope).
+   */
+  async listPendingForBranch(
+    branchId: string | null,
+    options: { limit: number; offset: number },
+  ): Promise<{ intents: ContributionIntentRow[]; total: number }> {
+    const conditions: string[] = [
+      `i.state IN ('PENDING', 'LATE')`,
+      `EXISTS (SELECT 1 FROM receipts r WHERE r.intent_id = i.id)`,
+      `NOT EXISTS (SELECT 1 FROM contributions c WHERE c.intent_id = i.id)`,
+    ];
+    const params: unknown[] = [];
+
+    if (branchId) {
+      params.push(branchId);
+      conditions.push(`i.branch_id = $${params.length}`);
+    }
+
+    const where = `WHERE ${conditions.join(' AND ')}`;
+
+    const countResult = await pool.query<{ count: string }>(
+      `SELECT COUNT(*)::text AS count FROM contribution_intents i ${where}`,
+      params,
+    );
+    const total = Number(countResult.rows[0]?.count ?? '0');
+
+    params.push(options.limit);
+    const limitIdx = params.length;
+    params.push(options.offset);
+    const offsetIdx = params.length;
+
+    const listResult = await pool.query<ContributionIntentRow>(
+      `SELECT i.* FROM contribution_intents i
+       ${where}
+       ORDER BY i.deadline_at ASC, i.slot_number ASC
+       LIMIT $${limitIdx} OFFSET $${offsetIdx}`,
+      params,
+    );
+
+    return { intents: listResult.rows, total };
   }
 
   // ---- Contributions ----
@@ -298,6 +385,89 @@ export class ContributionsRepository {
        WHERE i.tenant_id = $1
        ORDER BY r.created_at DESC`,
       [tenantId],
+    );
+    return result.rows;
+  }
+
+  // ---- Tenant visibility queries ----
+
+  /** All 12 members' status for a given tenant cycle. */
+  async listTenantCycleMembers(
+    tenantId: string,
+    tenure: number,
+    cycle: number,
+  ): Promise<TenantCycleMemberRow[]> {
+    const result = await pool.query<TenantCycleMemberRow>(
+      `SELECT
+         tm.id           AS membership_id,
+         tm.user_id      AS user_id,
+         tm.slot_number  AS slot_number,
+         u.full_name     AS full_name,
+         u.phone         AS phone,
+         i.id            AS intent_id,
+         i.state         AS intent_state,
+         i.reference     AS intent_reference,
+         i.deadline_at   AS intent_deadline_at,
+         c.id            AS contribution_id,
+         c.amount        AS contribution_amount,
+         c.confirmed_at  AS contribution_confirmed_at,
+         (r.id IS NOT NULL) AS has_receipt
+       FROM tenant_memberships tm
+         INNER JOIN users u ON u.id = tm.user_id
+         LEFT JOIN contribution_intents i
+           ON i.tenant_id = tm.tenant_id
+          AND i.user_id = tm.user_id
+          AND i.tenure = $2
+          AND i.cycle = $3
+         LEFT JOIN contributions c ON c.intent_id = i.id
+         LEFT JOIN receipts r ON r.intent_id = i.id
+       WHERE tm.tenant_id = $1 AND tm.status != 'REMOVED'
+       ORDER BY tm.slot_number ASC`,
+      [tenantId, tenure, cycle],
+    );
+    return result.rows;
+  }
+
+  /** Tenant ledger. */
+  async listLedgerByTenant(tenantId: string, limit: number): Promise<TenantLedgerRow[]> {
+    const result = await pool.query<TenantLedgerRow>(
+      `SELECT id, entry_type, entry_kind, amount, currency, reference, description, created_at
+       FROM ledger_entries
+       WHERE account_type = 'TENANT' AND tenant_id = $1
+       ORDER BY created_at DESC
+       LIMIT $2`,
+      [tenantId, limit],
+    );
+    return result.rows;
+  }
+
+  /** Tenant receipts gallery. */
+  async listReceiptsByTenantWithIntent(
+    tenantId: string,
+    limit: number,
+  ): Promise<TenantReceiptRow[]> {
+    const result = await pool.query<TenantReceiptRow>(
+      `SELECT
+         r.id               AS receipt_id,
+         r.object_key       AS object_key,
+         r.file_name        AS file_name,
+         r.mime_type        AS mime_type,
+         r.uploaded_by      AS uploaded_by,
+         u.full_name        AS uploaded_by_name,
+         r.claimed_amount   AS claimed_amount,
+         r.claimed_reference AS claimed_reference,
+         r.claimed_sender_name AS claimed_sender_name,
+         i.reference        AS intent_reference,
+         c.confirmed_at     AS contribution_confirmed_at,
+         r.created_at       AS created_at
+       FROM receipts r
+         INNER JOIN users u ON u.id = r.uploaded_by
+         LEFT JOIN contribution_intents i ON i.id = r.intent_id
+         LEFT JOIN contributions c ON c.intent_id = i.id
+       WHERE i.tenant_id = $1
+       ORDER BY r.created_at DESC
+       LIMIT $2`,
+      [tenantId, limit],
     );
     return result.rows;
   }

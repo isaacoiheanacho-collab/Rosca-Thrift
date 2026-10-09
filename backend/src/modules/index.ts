@@ -1,3 +1,8 @@
+/**
+ * Feature module registry.
+ * Every route group exported here gets mounted in src/server.ts.
+ */
+
 export { default as authRoutes } from './auth/auth.routes';
 export { default as usersRoutes } from './users/users.routes';
 
@@ -22,6 +27,7 @@ export {
 export {
   contributionsRouter,
   branchAdminContributionsRouter,
+  tenantVisibilityRouter,
 } from './contributions/contributions.routes';
 
 export { default as receiptsRouter } from './receipts/receipts.routes';

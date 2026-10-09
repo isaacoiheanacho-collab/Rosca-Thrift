@@ -1,15 +1,17 @@
 /**
  * OTP generation, hashing, and verification.
  *
- * Rules:
+ * Security:
  *  - 6-digit numeric code
- *  - SHA-256 hashed before storage (never store raw)
- *  - 10-minute default expiry (env override)
- *  - Max N wrong attempts (env override), then invalidated
+ *  - SHA-256 hashed before storage (never raw)
+ *  - Constant-time hash comparison (timing-safe)
+ *  - 10-minute default expiry
+ *  - Max N wrong attempts per code (env), then invalidated
+ *  - Max M failures per phone per 1-hour window (hard-coded 15), then lockout
  *  - Only one active code per (phone, purpose)
  */
 
-import { randomInt, createHash } from 'node:crypto';
+import { randomInt, createHash, timingSafeEqual } from 'node:crypto';
 import { pool, withTransaction } from '../db';
 import { env } from '../config/env';
 import { logger } from '../logger';
@@ -17,12 +19,24 @@ import { sendSms } from './sms';
 
 export type OtpPurpose = 'signup' | 'reset' | 'verify_phone';
 
+const PHONE_FAILURE_LIMIT = 15; // total failed verifications per phone per 1h
+const PHONE_FAILURE_WINDOW_MINUTES = 60;
+
 export function generateOtp(): string {
   return String(randomInt(0, 1_000_000)).padStart(6, '0');
 }
 
 export function hashOtp(code: string): string {
   return createHash('sha256').update(code).digest('hex');
+}
+
+/** Constant-time comparison of two hex strings. Returns false if lengths differ. */
+function timingSafeHexEqual(a: string, b: string): boolean {
+  if (a.length !== b.length) return false;
+  const bufA = Buffer.from(a, 'hex');
+  const bufB = Buffer.from(b, 'hex');
+  if (bufA.length !== bufB.length) return false;
+  return timingSafeEqual(bufA, bufB);
 }
 
 interface OtpRow {
@@ -36,8 +50,7 @@ interface OtpRow {
 }
 
 /**
- * Create + send an OTP. Rate-limits: max 5 per phone per hour.
- * Returns ok=false if the SMS send failed.
+ * Create + send an OTP. Rate-limits: max 5 per phone per hour (dev) or 3 (prod).
  */
 export async function createAndSendOtp(
   phone: string,
@@ -53,7 +66,7 @@ export async function createAndSendOtp(
   const sentLastHour = Number(rateCheck.rows[0]?.count ?? '0');
   const limit = env.IS_PRODUCTION ? 3 : 5;
   if (sentLastHour >= limit) {
-    logger.warn({ phone, purpose, sentLastHour }, 'OTP rate limit hit');
+    logger.warn({ purpose, sentLastHour }, 'OTP rate limit hit');
     return { ok: false, error: 'Too many codes requested - try again later' };
   }
 
@@ -62,14 +75,12 @@ export async function createAndSendOtp(
   const expiresAt = new Date(Date.now() + env.OTP_EXPIRY_MINUTES * 60 * 1000);
 
   await withTransaction(async (tx) => {
-    // Invalidate any existing unconsumed codes for the same phone + purpose
     await tx.query(
       `UPDATE otp_codes SET consumed_at = NOW()
        WHERE phone = $1 AND purpose = $2 AND consumed_at IS NULL`,
       [phone, purpose],
     );
 
-    // Insert new code
     await tx.query(
       `INSERT INTO otp_codes (phone, code_hash, purpose, expires_at, ip_address)
        VALUES ($1, $2, $3, $4, $5)`,
@@ -91,9 +102,8 @@ export async function createAndSendOtp(
     return { ok: false, error: send.error ?? 'Failed to send SMS' };
   }
 
-  // Dev hint - log the code locally only
   if (env.IS_DEVELOPMENT) {
-    logger.info({ phone, purpose, code }, 'DEV: OTP code (logged for testing)');
+    logger.info({ purpose, code }, 'DEV: OTP code (logged for testing)');
   }
 
   return { ok: true };
@@ -101,17 +111,36 @@ export async function createAndSendOtp(
 
 /**
  * Verify an OTP. Returns ok=true if valid and consumes it.
- * Increments attempts on failure; invalidates after N failed attempts.
+ *
+ * Enforces:
+ *  - Per-code wrong-attempt limit (env.OTP_MAX_ATTEMPTS)
+ *  - Per-phone failure limit over 1-hour window (PHONE_FAILURE_LIMIT)
+ *  - Expiry
+ *  - Constant-time comparison
  */
 export async function verifyOtp(
   phone: string,
   purpose: OtpPurpose,
   code: string,
 ): Promise<{ ok: boolean; error?: string }> {
-  // Dev override - allows a fixed master code in dev
+  // Dev override — only fires in development
   if (env.IS_DEVELOPMENT && env.DEV_OTP_OVERRIDE && code === env.DEV_OTP_OVERRIDE) {
-    logger.warn({ phone, purpose }, 'DEV: OTP override used');
+    logger.warn({ purpose }, 'DEV: OTP override used');
     return { ok: true };
+  }
+
+  // Per-phone failure lockout (across all recent codes)
+  const failCheck = await pool.query<{ count: string }>(
+    `SELECT COUNT(*)::text AS count FROM otp_codes
+     WHERE phone = $1
+       AND attempts > 0
+       AND created_at > NOW() - INTERVAL '${PHONE_FAILURE_WINDOW_MINUTES} minutes'`,
+    [phone],
+  );
+  const recentFailures = Number(failCheck.rows[0]?.count ?? '0');
+  if (recentFailures >= PHONE_FAILURE_LIMIT) {
+    logger.warn({ purpose, recentFailures }, 'OTP phone lockout triggered');
+    return { ok: false, error: 'Too many failed attempts - try again later' };
   }
 
   const result = await pool.query<OtpRow>(
@@ -135,7 +164,7 @@ export async function verifyOtp(
   }
 
   const suppliedHash = hashOtp(code);
-  if (suppliedHash !== row.code_hash) {
+  if (!timingSafeHexEqual(suppliedHash, row.code_hash)) {
     await pool.query(`UPDATE otp_codes SET attempts = attempts + 1 WHERE id = $1`, [row.id]);
     return { ok: false, error: 'Invalid code' };
   }

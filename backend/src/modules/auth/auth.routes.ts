@@ -1,17 +1,14 @@
 /**
  * Auth routes - phone-first.
  *
- *   POST /api/auth/register          - create account, sends OTP
- *   POST /api/auth/verify-phone    - confirm OTP, returns tokens
- *   POST /api/auth/login           - phone + password
- *   POST /api/auth/refresh         - rotate refresh token
- *   POST /api/auth/logout          - revoke refresh token
- *   POST /api/auth/password/forgot - send reset OTP
- *   POST /api/auth/password/reset  - consume reset OTP, set new password
- *   GET  /api/auth/me              - current user
+ * Rate limiting strategy:
+ *   - Global: 20 req/min per IP on all /auth/*
+ *   - Extra: 10 req/min per IP on /verify-phone and /password/reset
+ *   - Sessions sub-router is mounted in server.ts (not here)
  */
 
 import { Router, type Request, type Response, type NextFunction } from 'express';
+import rateLimit from 'express-rate-limit';
 import { validate } from '../../middleware/validate';
 import { requireAuth } from '../../middleware/auth';
 import { authService, type RequestMeta } from './auth.service';
@@ -25,12 +22,27 @@ import {
 } from './auth.schemas';
 import { authRepository } from './auth.repository';
 import { NotFoundError } from '../../errors';
+import { env } from '../../config/env';
 
 const router = Router();
 
 function metaOf(req: Request): RequestMeta {
   return { ipAddress: req.ip, userAgent: req.header('user-agent') ?? undefined };
 }
+
+const otpVerifyLimiter = rateLimit({
+  windowMs: 60_000,
+  limit: 10,
+  standardHeaders: 'draft-7',
+  legacyHeaders: false,
+  handler: (_req: Request, res: Response) => {
+    res.status(429).json({
+      ok: false,
+      error: { code: 'RATE_LIMIT_EXCEEDED', message: 'Too many attempts - wait a minute.' },
+    });
+  },
+  skip: () => env.IS_DEVELOPMENT,
+});
 
 router.post(
   '/register',
@@ -47,6 +59,7 @@ router.post(
 
 router.post(
   '/verify-phone',
+  otpVerifyLimiter,
   validate({ body: VerifyPhoneSchema }),
   async (req: Request, res: Response, next: NextFunction) => {
     try {
@@ -112,6 +125,7 @@ router.post(
 
 router.post(
   '/password/reset',
+  otpVerifyLimiter,
   validate({ body: ResetPasswordSchema }),
   async (req: Request, res: Response, next: NextFunction) => {
     try {

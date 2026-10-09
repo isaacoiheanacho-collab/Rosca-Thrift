@@ -1,6 +1,6 @@
 /**
  * Contributions service — business logic for intent creation, admin
- * confirmation, rejection, and receipt uploads.
+ * confirmation, rejection, receipt uploads, and tenant/admin visibility.
  */
 
 import { logger } from '../../logger';
@@ -72,6 +72,63 @@ export interface ReceiptDto {
   claimedReference: string | null;
   claimedSenderName: string | null;
   claimedNote: string | null;
+  createdAt: string;
+}
+
+export interface PendingIntentDto extends ContributionIntentDto {
+  receipt: {
+    id: string;
+    objectUrl: string;
+    fileName: string;
+    mimeType: string;
+    claimedAmountPence: string | null;
+    claimedReference: string | null;
+    claimedSenderName: string | null;
+    claimedNote: string | null;
+    uploadedAt: string;
+  } | null;
+}
+
+export interface TenantCycleMemberDto {
+  membershipId: string;
+  userId: string;
+  slotNumber: number;
+  fullName: string;
+  phone: string;
+  intentId: string | null;
+  intentState: 'PENDING' | 'CONFIRMED' | 'LATE' | 'EXEMPT' | null;
+  intentReference: string | null;
+  intentDeadlineAt: string | null;
+  contributionId: string | null;
+  contributionAmountPence: string | null;
+  contributionConfirmedAt: string | null;
+  hasReceipt: boolean;
+}
+
+export interface TenantLedgerDto {
+  id: string;
+  entryType: 'CREDIT' | 'DEBIT';
+  entryKind: string;
+  amountPence: string;
+  amountGbp: string;
+  currency: string;
+  reference: string;
+  description: string | null;
+  createdAt: string;
+}
+
+export interface TenantReceiptDto {
+  receiptId: string;
+  objectUrl: string;
+  fileName: string;
+  mimeType: string;
+  uploadedBy: string;
+  uploadedByName: string;
+  claimedAmountPence: string | null;
+  claimedReference: string | null;
+  claimedSenderName: string | null;
+  intentReference: string | null;
+  contributionConfirmedAt: string | null;
   createdAt: string;
 }
 
@@ -266,6 +323,112 @@ export class ContributionsService {
       intents: intents.map((i) => intentToDto(i, null)),
       contributions: contributions.map(contributionToDto),
     };
+  }
+
+  /**
+   * Pending verification queue for admin.
+   * branchId = null → super admin sees all branches.
+   */
+  async listPendingForAdmin(
+    branchId: string | null,
+    options: { limit: number; offset: number },
+  ): Promise<{ intents: PendingIntentDto[]; total: number }> {
+    const { intents, total } = await contributionsRepository.listPendingForBranch(
+      branchId,
+      options,
+    );
+
+    const dtos: PendingIntentDto[] = [];
+    for (const i of intents) {
+      const dto = intentToDto(i, null);
+      const receipt = await contributionsRepository.findReceiptByIntentId(i.id);
+
+      if (receipt) {
+        const url = await getPresignedDownloadUrl(receipt.object_key, 300);
+        dtos.push({
+          ...dto,
+          receipt: {
+            id: receipt.id,
+            objectUrl: url,
+            fileName: receipt.file_name,
+            mimeType: receipt.mime_type,
+            claimedAmountPence: receipt.claimed_amount?.toString() ?? null,
+            claimedReference: receipt.claimed_reference,
+            claimedSenderName: receipt.claimed_sender_name,
+            claimedNote: receipt.claimed_note,
+            uploadedAt: receipt.created_at.toISOString(),
+          },
+        });
+      } else {
+        dtos.push({ ...dto, receipt: null });
+      }
+    }
+
+    return { intents: dtos, total };
+  }
+
+  /** All 12 members' statuses for the current cycle. */
+  async listTenantCycleMembers(
+    tenantId: string,
+    tenure: number,
+    cycle: number,
+  ): Promise<TenantCycleMemberDto[]> {
+    const rows = await contributionsRepository.listTenantCycleMembers(tenantId, tenure, cycle);
+    return rows.map((r) => ({
+      membershipId: r.membership_id,
+      userId: r.user_id,
+      slotNumber: r.slot_number,
+      fullName: r.full_name,
+      phone: r.phone,
+      intentId: r.intent_id,
+      intentState: r.intent_state,
+      intentReference: r.intent_reference,
+      intentDeadlineAt: r.intent_deadline_at?.toISOString() ?? null,
+      contributionId: r.contribution_id,
+      contributionAmountPence: r.contribution_amount?.toString() ?? null,
+      contributionConfirmedAt: r.contribution_confirmed_at?.toISOString() ?? null,
+      hasReceipt: r.has_receipt,
+    }));
+  }
+
+  /** Tenant ledger. */
+  async listTenantLedger(tenantId: string, limit = 100): Promise<TenantLedgerDto[]> {
+    const rows = await contributionsRepository.listLedgerByTenant(tenantId, limit);
+    return rows.map((r) => ({
+      id: r.id,
+      entryType: r.entry_type,
+      entryKind: r.entry_kind,
+      amountPence: r.amount.toString(),
+      amountGbp: (Number(r.amount) / 100).toFixed(2),
+      currency: r.currency,
+      reference: r.reference,
+      description: r.description,
+      createdAt: r.created_at.toISOString(),
+    }));
+  }
+
+  /** Tenant receipts gallery. */
+  async listTenantReceipts(tenantId: string, limit = 100): Promise<TenantReceiptDto[]> {
+    const rows = await contributionsRepository.listReceiptsByTenantWithIntent(tenantId, limit);
+    const dtos: TenantReceiptDto[] = [];
+    for (const r of rows) {
+      const url = await getPresignedDownloadUrl(r.object_key, 300);
+      dtos.push({
+        receiptId: r.receipt_id,
+        objectUrl: url,
+        fileName: r.file_name,
+        mimeType: r.mime_type,
+        uploadedBy: r.uploaded_by,
+        uploadedByName: r.uploaded_by_name,
+        claimedAmountPence: r.claimed_amount?.toString() ?? null,
+        claimedReference: r.claimed_reference,
+        claimedSenderName: r.claimed_sender_name,
+        intentReference: r.intent_reference,
+        contributionConfirmedAt: r.contribution_confirmed_at?.toISOString() ?? null,
+        createdAt: r.created_at.toISOString(),
+      });
+    }
+    return dtos;
   }
 
   async confirmContribution(
