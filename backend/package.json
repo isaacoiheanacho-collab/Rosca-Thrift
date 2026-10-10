@@ -19,7 +19,8 @@
     "test:tenants-read": "ts-node --transpile-only scripts/test-tenants-read.ts",
     "test:contribution": "ts-node --transpile-only scripts/test-contribution-flow.ts",
     "test:visibility": "ts-node --transpile-only scripts/test-tenant-visibility.ts",
-    "test:idor": "ts-node --transpile-only scripts/test-idor.ts"
+    "test:idor": "ts-node --transpile-only scripts/test-idor.ts",
+    "test:payout": "ts-node --transpile-only scripts/test-payout-flow.ts"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.1146.0",

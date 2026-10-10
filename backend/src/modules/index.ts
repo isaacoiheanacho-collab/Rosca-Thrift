@@ -37,3 +37,9 @@ export {
   superAdminMaintenanceAccountRouter,
   superAdminBranchPoolAccountRouter,
 } from './pool-accounts/pool-accounts.routes';
+
+export {
+  branchAdminPayoutsRouter,
+  superAdminPayoutsRouter,
+  tenantPayoutVisibilityRouter,
+} from './payouts/payouts.routes';

@@ -17,12 +17,15 @@ export interface TenantRow {
   completed_at: Date | null;
   created_at: Date;
   updated_at: Date;
-  // Cycle columns (added by migration 011)
+  // Cycle columns (migration 011)
   current_tenure: number;
   cycle_started_at: Date | null;
   cycle_ends_at: Date | null;
   cycle_contribution_deadline_at: Date | null;
   cycle_payout_at: Date | null;
+  // Tenure rate snapshots (migration 012)
+  current_tenure_fee_bps: number;
+  current_tenure_tvc_bps: number;
 }
 
 export interface TenantMembershipRow {

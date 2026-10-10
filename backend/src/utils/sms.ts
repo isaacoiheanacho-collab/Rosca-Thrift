@@ -1,10 +1,13 @@
 /**
  * SMS delivery via textbee.dev.
  *
- * textbee routes messages through an Android device's SIM card.
- * Requires: TEXTBEE_API_KEY + TEXTBEE_DEVICE_ID.
+ * In development, SMS is skipped for test phone numbers:
+ *   - +447700*  (test prefix)
+ *   - +447800*
+ *   - +447900*
  *
- * Never log full messages at info level (they may contain OTPs).
+ * This lets us run automated tests without consuming the daily SMS quota.
+ * Real customer numbers in production still go through textbee.
  */
 
 import { env } from '../config/env';
@@ -24,10 +27,24 @@ interface TextbeeResponse {
   };
 }
 
-/** Send an SMS. Returns ok=true on success. Never throws. */
+const TEST_PHONE_PREFIXES = ['+447700', '+447800', '+447900'];
+
+function isTestPhone(phone: string): boolean {
+  return TEST_PHONE_PREFIXES.some((p) => phone.startsWith(p));
+}
+
 export async function sendSms(to: string, message: string): Promise<SendSmsResult> {
   if (!/^\+[1-9]\d{6,14}$/.test(to)) {
     return { ok: false, error: `Invalid E.164 phone: ${to}` };
+  }
+
+  // In development, skip real SMS for test phone numbers
+  if (env.IS_DEVELOPMENT && isTestPhone(to)) {
+    logger.info(
+      { to, preview: message.slice(0, 40) + '...' },
+      'SMS: DEV mode — skipping send for test phone (no textbee call)',
+    );
+    return { ok: true, smsBatchId: 'dev-skipped' };
   }
 
   const url = `${env.TEXTBEE_BASE_URL}/gateway/send-sms`;

@@ -9,16 +9,19 @@
  *      - If none exists → create a new tenant for the branch.
  *   3. Pick a random free slot (1-12).
  *   4. Insert membership.
- *   5. If tenant now has 12 members → mark tenant ACTIVE, set activated_at.
+ *   5. If tenant now has 12 members → mark tenant ACTIVE, set activated_at,
+ *      set cycle columns, snapshot tenure rates, generate cycle-1 intents.
  *   6. Audit every step.
  *
  * Idempotent: safe to call multiple times.
  */
 
 import { withTransaction } from '../../db';
+import { env } from '../../config/env';
 import { logger } from '../../logger';
 import { record } from '../audit/audit.service';
 import { tenantsRepository, type TenantRow } from './tenants.repository';
+import { rotationService } from '../payouts/rotation.service';
 
 export interface ProvisionResult {
   tenantId: string;
@@ -35,15 +38,7 @@ function pickRandomFreeSlot(used: number[]): number | null {
 }
 
 export class ProvisioningService {
-  /**
-   * Assign a user to a tenant in their branch.
-   * Creates a new tenant if none is filling.
-   * Activates the tenant when it reaches 12 members.
-   */
-  async provisionUserToTenant(
-    userId: string,
-    branchId: string,
-  ): Promise<ProvisionResult> {
+  async provisionUserToTenant(userId: string, branchId: string): Promise<ProvisionResult> {
     // 1. Already provisioned?
     const existing = await tenantsRepository.findMembershipByUser(userId);
     if (existing) {
@@ -76,7 +71,6 @@ export class ProvisioningService {
 
     // 3. Assign slot inside a transaction so we never double-book
     const result = await withTransaction(async (tx) => {
-      // Re-check slots within the transaction to avoid race conditions
       const usedSlotsRes = await tx.query<{ slot_number: number }>(
         `SELECT slot_number FROM tenant_memberships
          WHERE tenant_id = $1 AND status != 'REMOVED'`,
@@ -97,7 +91,6 @@ export class ProvisioningService {
       );
       const membership = membershipRes.rows[0]!;
 
-      // Count members now
       const countRes = await tx.query<{ count: string }>(
         `SELECT COUNT(*)::text AS count FROM tenant_memberships
          WHERE tenant_id = $1 AND status != 'REMOVED'`,
@@ -107,8 +100,8 @@ export class ProvisioningService {
 
       let activated = false;
 
-      // Activate the tenant on the 12th member — begin cycle 1
       if (memberCount >= 12 && tenant!.status === 'FILLING') {
+        // Set activation + cycle + snapshot tenure rates
         await tx.query(
           `UPDATE tenants
            SET status = 'ACTIVE',
@@ -118,14 +111,15 @@ export class ProvisioningService {
                cycle_started_at = NOW(),
                cycle_ends_at = NOW() + INTERVAL '30 days',
                cycle_contribution_deadline_at = NOW() + INTERVAL '21 days',
-               cycle_payout_at = NOW() + INTERVAL '30 days'
+               cycle_payout_at = NOW() + INTERVAL '30 days',
+               current_tenure_fee_bps = $2,
+               current_tenure_tvc_bps = $3
            WHERE id = $1 AND status = 'FILLING'`,
-          [tenant!.id],
+          [tenant!.id, env.PLATFORM_FEE_BPS, env.TVC_ANNUAL_BPS],
         );
         activated = true;
       }
 
-      // Audit membership
       await record(
         {
           actorId: null,
@@ -144,7 +138,7 @@ export class ProvisioningService {
             action: 'TENANT_ACTIVATED',
             entityType: 'tenant',
             entityId: tenant!.id,
-            metadata: { memberCount },
+            metadata: { memberCount, feeBps: env.PLATFORM_FEE_BPS, tvcBps: env.TVC_ANNUAL_BPS },
           },
           tx,
         );
@@ -164,6 +158,19 @@ export class ProvisioningService {
       },
       'User provisioned to tenant',
     );
+
+    // 4. If activated, generate cycle-1 payout + fee intents (outside the tx —
+    //    it opens its own transaction internally, and this is idempotent).
+    if (result.activated) {
+      try {
+        await rotationService.ensureIntentsForCycle(tenant.id, 1, 1);
+      } catch (err) {
+        logger.error(
+          { err, tenantId: tenant.id },
+          'Failed to generate cycle-1 payout intents — can be retried manually',
+        );
+      }
+    }
 
     return {
       tenantId: tenant.id,
