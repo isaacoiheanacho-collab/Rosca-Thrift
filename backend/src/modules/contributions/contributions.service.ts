@@ -10,6 +10,7 @@ import { AppError, ConflictError, NotFoundError } from '../../errors';
 import { uploadObject, getPresignedDownloadUrl } from '../../utils/s3';
 import { buildContributionReference, parseReference } from '../../utils/reference';
 import { tenantsRepository } from '../tenants/tenants.repository';
+import { cycleAdvancementService } from '../tenants/cycle-advancement.service';
 import { record } from '../audit/audit.service';
 import { ledgerService } from '../ledger/ledger.service';
 import {
@@ -194,6 +195,14 @@ export class ContributionsService {
     userId: string,
     meta: RequestMeta,
   ): Promise<ContributionIntentDto> {
+    // Lazy cycle-advancement trigger: if this user's tenant has a completed
+    // cycle waiting to advance, advance it before doing anything else.
+    try {
+      await cycleAdvancementService.advanceForUser(userId);
+    } catch (err) {
+      logger.error({ err, userId }, 'Lazy cycle advancement failed (contributions)');
+    }
+
     const membership = await tenantsRepository.findMembershipByUser(userId);
     if (!membership) {
       throw new AppError({
@@ -325,10 +334,6 @@ export class ContributionsService {
     };
   }
 
-  /**
-   * Pending verification queue for admin.
-   * branchId = null → super admin sees all branches.
-   */
   async listPendingForAdmin(
     branchId: string | null,
     options: { limit: number; offset: number },
@@ -367,7 +372,6 @@ export class ContributionsService {
     return { intents: dtos, total };
   }
 
-  /** All 12 members' statuses for the current cycle. */
   async listTenantCycleMembers(
     tenantId: string,
     tenure: number,
@@ -391,7 +395,6 @@ export class ContributionsService {
     }));
   }
 
-  /** Tenant ledger. */
   async listTenantLedger(tenantId: string, limit = 100): Promise<TenantLedgerDto[]> {
     const rows = await contributionsRepository.listLedgerByTenant(tenantId, limit);
     return rows.map((r) => ({
@@ -407,7 +410,6 @@ export class ContributionsService {
     }));
   }
 
-  /** Tenant receipts gallery. */
   async listTenantReceipts(tenantId: string, limit = 100): Promise<TenantReceiptDto[]> {
     const rows = await contributionsRepository.listReceiptsByTenantWithIntent(tenantId, limit);
     const dtos: TenantReceiptDto[] = [];

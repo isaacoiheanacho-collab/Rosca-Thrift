@@ -2,12 +2,14 @@
  * Tenants service — business logic.
  *
  * Phase 1.4c: adds member listing + branch summary endpoints.
+ * Phase 1.7:  lazy cycle advancement on dashboard load.
  */
 
 import { logger } from '../../logger';
 import { AppError, ConflictError, NotFoundError } from '../../errors';
 import { record } from '../audit/audit.service';
 import { usersRepository } from '../users/users.repository';
+import { cycleAdvancementService } from './cycle-advancement.service';
 import {
   tenantsRepository,
   type TenantMembershipRow,
@@ -106,6 +108,14 @@ export class TenantsService {
   }
 
   async getMyTenant(userId: string): Promise<MyTenantDto | null> {
+    // Lazy cycle-advancement trigger: if the tenant's current cycle is finished
+    // (payout confirmed) but not yet advanced, advance it now.
+    try {
+      await cycleAdvancementService.advanceForUser(userId);
+    } catch (err) {
+      logger.error({ err, userId }, 'Lazy cycle advancement failed');
+    }
+
     const membership = await tenantsRepository.findMembershipByUser(userId);
     if (!membership) return null;
 
@@ -122,7 +132,6 @@ export class TenantsService {
     };
   }
 
-  /** List members of the tenant the current user belongs to. */
   async listMyMembers(userId: string): Promise<TenantMemberDto[]> {
     const membership = await tenantsRepository.findMembershipByUser(userId);
     if (!membership) return [];
@@ -130,7 +139,6 @@ export class TenantsService {
     return Promise.all(memberships.map((m) => membershipToDto(m, userId)));
   }
 
-  /** Branch admin summary: counts + list of tenants in their branch. */
   async getSummaryForBranch(branchId: string): Promise<BranchSummaryDto> {
     const { tenants } = await tenantsRepository.findByBranch(branchId, {
       limit: 1000,

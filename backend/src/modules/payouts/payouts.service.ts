@@ -8,6 +8,7 @@
  *   4. Branch admin uploads payout receipt.
  *   5. Branch admin marks done → payout_intent.state = CONFIRMED.
  *   6. Ledger: debit tenant pool (payout amount), credit platform (fee amount).
+ *   7. After payout confirmed, trigger cycle advancement (event-driven).
  */
 
 import { logger } from '../../logger';
@@ -17,6 +18,7 @@ import { uploadObject } from '../../utils/s3';
 import { record } from '../audit/audit.service';
 import { ledgerService } from '../ledger/ledger.service';
 import { usersRepository } from '../users/users.repository';
+import { cycleAdvancementService } from '../tenants/cycle-advancement.service';
 import { payoutsRepository, type PayoutIntentRow, type PlatformFeeIntentRow } from './payouts.repository';
 
 export interface RequestMeta {
@@ -68,7 +70,6 @@ export interface PlatformFeeIntentDto {
 
 async function payoutToDto(row: PayoutIntentRow): Promise<PayoutIntentDto> {
   const recipient = await usersRepository.findById(row.recipient_user_id);
-
   return {
     id: row.id,
     tenantId: row.tenant_id,
@@ -177,7 +178,6 @@ export class PayoutsService {
   ): Promise<PlatformFeeIntentDto> {
     const fee = await payoutsRepository.findFeeIntentById(feeIntentId);
     if (!fee) throw new NotFoundError('Fee intent');
-
     if (fee.branch_id !== branchId) {
       throw new AppError({
         code: 'AUTH_BRANCH_SCOPE',
@@ -185,7 +185,6 @@ export class PayoutsService {
         message: 'Not permitted for this branch',
       });
     }
-
     if (fee.state === 'CONFIRMED') {
       throw new ConflictError('Fee already confirmed', 'FEE_ALREADY_CONFIRMED');
     }
@@ -197,18 +196,11 @@ export class PayoutsService {
       purpose: 'platform-fee',
     });
 
-    // Store receipt linked to fee intent via receipts table.
-    // Note: receipts.purpose uses 'PLATFORM_FEE'; we repurpose the `intent_id` column
-    // to point at the payout intent, but for fees we have no intent_id — so we use payout_id
-    // (which references payout_intents). Instead, we store the receipt linked via a
-    // separate approach: create the receipt on the payout intent that this fee belongs to.
-    // Find the payout intent that references this fee.
     const payout = await payoutsRepository.findPayoutIntent(
       fee.tenant_id,
       fee.tenure,
       fee.cycle,
     );
-
     if (!payout) {
       throw new AppError({
         code: 'PAYOUT_NOT_FOUND_FOR_FEE',
@@ -253,7 +245,6 @@ export class PayoutsService {
     });
 
     logger.info({ feeIntentId: fee.id, actorId }, 'Fee receipt uploaded');
-
     const refreshed = await payoutsRepository.findFeeIntentById(fee.id);
     return feeToDto(refreshed!);
   }
@@ -271,7 +262,6 @@ export class PayoutsService {
   ): Promise<{ fee: PlatformFeeIntentDto; payout: PayoutIntentDto }> {
     const fee = await payoutsRepository.findFeeIntentById(feeIntentId);
     if (!fee) throw new NotFoundError('Fee intent');
-
     if (fee.state === 'CONFIRMED') {
       throw new ConflictError('Fee already confirmed', 'FEE_ALREADY_CONFIRMED');
     }
@@ -285,7 +275,6 @@ export class PayoutsService {
 
     await withTransaction(async (tx) => {
       await payoutsRepository.updateFeeIntentState(fee.id, 'CONFIRMED', adminId, tx);
-
       await payoutsRepository.updatePayoutState(
         payout.id,
         'FEE_PAID',
@@ -328,11 +317,7 @@ export class PayoutsService {
 
     const refreshedFee = await payoutsRepository.findFeeIntentById(fee.id);
     const refreshedPayout = await payoutsRepository.findPayoutIntentById(payout.id);
-
-    return {
-      fee: feeToDto(refreshedFee!),
-      payout: await payoutToDto(refreshedPayout!),
-    };
+    return { fee: feeToDto(refreshedFee!), payout: await payoutToDto(refreshedPayout!) };
   }
 
   /**
@@ -354,7 +339,6 @@ export class PayoutsService {
   ): Promise<PayoutIntentDto> {
     const payout = await payoutsRepository.findPayoutIntentById(payoutId);
     if (!payout) throw new NotFoundError('Payout intent');
-
     if (payout.branch_id !== branchId) {
       throw new AppError({
         code: 'AUTH_BRANCH_SCOPE',
@@ -362,11 +346,9 @@ export class PayoutsService {
         message: 'Not permitted for this branch',
       });
     }
-
     if (payout.state === 'CONFIRMED') {
       throw new ConflictError('Payout already confirmed', 'PAYOUT_ALREADY_CONFIRMED');
     }
-
     if (payout.state === 'PENDING') {
       throw new ConflictError(
         'Platform fee not yet confirmed — payout not unlocked',
@@ -417,7 +399,6 @@ export class PayoutsService {
     });
 
     logger.info({ payoutId: payout.id, actorId }, 'Payout receipt uploaded');
-
     const refreshed = await payoutsRepository.findPayoutIntentById(payout.id);
     return payoutToDto(refreshed!);
   }
@@ -425,6 +406,7 @@ export class PayoutsService {
   /**
    * Branch admin confirms payout complete.
    * Transitions payout → CONFIRMED. Debits tenant ledger.
+   * Then triggers cycle advancement (event-driven).
    */
   async confirmPayout(
     payoutId: string,
@@ -434,7 +416,6 @@ export class PayoutsService {
   ): Promise<PayoutIntentDto> {
     const payout = await payoutsRepository.findPayoutIntentById(payoutId);
     if (!payout) throw new NotFoundError('Payout intent');
-
     if (payout.branch_id !== branchId) {
       throw new AppError({
         code: 'AUTH_BRANCH_SCOPE',
@@ -442,11 +423,9 @@ export class PayoutsService {
         message: 'Not permitted for this branch',
       });
     }
-
     if (payout.state === 'CONFIRMED') {
       throw new ConflictError('Payout already confirmed', 'PAYOUT_ALREADY_CONFIRMED');
     }
-
     if (payout.state !== 'RECEIPT_UPLOADED') {
       throw new ConflictError(
         'Payout receipt must be uploaded first',
@@ -495,6 +474,28 @@ export class PayoutsService {
       { payoutId: payout.id, actorId, netAmount: payout.net_amount.toString() },
       'Payout confirmed, ledger debited',
     );
+
+    // ─────────────────────────────────────────────────────────────
+    // Event-driven cycle advancement:
+    // After payout is confirmed, the current cycle is complete.
+    // Advance the tenant to the next cycle (idempotent).
+    // ─────────────────────────────────────────────────────────────
+    try {
+      const adv = await cycleAdvancementService.advanceIfCycleComplete(payout.tenant_id);
+      logger.info(
+        {
+          tenantId: payout.tenant_id,
+          advanced: adv.advanced,
+          reason: adv.reason,
+          previousCycle: adv.previousCycle,
+          newCycle: adv.newCycle,
+          tenantCompleted: adv.tenantCompleted,
+        },
+        'Payout confirmed, cycle advancement attempted',
+      );
+    } catch (err) {
+      logger.error({ err, tenantId: payout.tenant_id }, 'Cycle advancement failed');
+    }
 
     const refreshed = await payoutsRepository.findPayoutIntentById(payout.id);
     return payoutToDto(refreshed!);

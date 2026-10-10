@@ -26,6 +26,8 @@ export interface TenantRow {
   // Tenure rate snapshots (migration 012)
   current_tenure_fee_bps: number;
   current_tenure_tvc_bps: number;
+  // Cycle advancement audit (migration 013)
+  cycle_advanced_at: Date | null;
 }
 
 export interface TenantMembershipRow {
