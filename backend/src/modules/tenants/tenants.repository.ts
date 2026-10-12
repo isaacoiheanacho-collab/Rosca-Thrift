@@ -1,11 +1,12 @@
 /**
- * Tenants repository — all SQL for tenants + memberships.
+ * Tenants repository - all SQL for tenants + memberships.
  */
 
 import { pool } from '../../db';
 
 export type TenantStatus = 'FILLING' | 'ACTIVE' | 'COMPLETED' | 'ARCHIVED';
 export type MembershipStatus = 'ACTIVE' | 'COLLECTED' | 'REMOVED';
+export type RenewalState = 'NONE' | 'VOTING' | 'REPLACING' | 'READY' | 'RENEWED' | 'DISSOLVED';
 
 export interface TenantRow {
   id: string;
@@ -28,6 +29,12 @@ export interface TenantRow {
   current_tenure_tvc_bps: number;
   // Cycle advancement audit (migration 013)
   cycle_advanced_at: Date | null;
+  // Tenure renewal (migration 014)
+  renewal_state: RenewalState;
+  renewal_opened_at: Date | null;
+  renewal_vote_ends_at: Date | null;
+  renewal_fill_ends_at: Date | null;
+  tenure_started_at: Date | null;
 }
 
 export interface TenantMembershipRow {
@@ -38,6 +45,9 @@ export interface TenantMembershipRow {
   status: MembershipStatus;
   joined_at: Date;
   collected_at: Date | null;
+  // Tenure renewal (migration 014)
+  tenure_joined: number;
+  is_replacement_for_user_id: string | null;
 }
 
 export class TenantsRepository {
@@ -51,6 +61,22 @@ export class TenantsRepository {
       `SELECT * FROM tenants
        WHERE branch_id = $1 AND status = 'FILLING'
        ORDER BY created_at ASC
+       LIMIT 1`,
+      [branchId],
+    );
+    return result.rows[0] ?? null;
+  }
+
+  /**
+   * Find a tenant in this branch that is waiting for a replacement
+   * (renewal_state = REPLACING). Used by the provisioning service to
+   * prioritize replacing tenants over fresh FILLING tenants.
+   */
+  async findReplacingByBranch(branchId: string): Promise<TenantRow | null> {
+    const result = await pool.query<TenantRow>(
+      `SELECT * FROM tenants
+       WHERE branch_id = $1 AND renewal_state = 'REPLACING'
+       ORDER BY renewal_opened_at ASC NULLS LAST
        LIMIT 1`,
       [branchId],
     );
@@ -128,7 +154,8 @@ export class TenantsRepository {
 
   async countMembers(tenantId: string): Promise<number> {
     const result = await pool.query<{ count: string }>(
-      `SELECT COUNT(*)::text AS count FROM tenant_memberships WHERE tenant_id = $1`,
+      `SELECT COUNT(*)::text AS count FROM tenant_memberships
+       WHERE tenant_id = $1 AND status != 'REMOVED'`,
       [tenantId],
     );
     return Number(result.rows[0]?.count ?? '0');
@@ -176,6 +203,49 @@ export class TenantsRepository {
       [tenantId, userId, slotNumber],
     );
     return result.rows[0]!;
+  }
+
+  /**
+   * Insert a membership that is joining via renewal replacement or rebalance.
+   * Carries tenure_joined + is_replacement_for_user_id metadata.
+   */
+  async insertMembershipWithTenure(
+    data: {
+      tenantId: string;
+      userId: string;
+      slotNumber: number;
+      tenureJoined: number;
+      isReplacementForUserId: string | null;
+    },
+    tx?: import('pg').PoolClient,
+  ): Promise<TenantMembershipRow> {
+    const runner = tx ?? pool;
+    const result = await runner.query<TenantMembershipRow>(
+      `INSERT INTO tenant_memberships
+         (tenant_id, user_id, slot_number, tenure_joined, is_replacement_for_user_id)
+       VALUES ($1, $2, $3, $4, $5)
+       RETURNING *`,
+      [
+        data.tenantId,
+        data.userId,
+        data.slotNumber,
+        data.tenureJoined,
+        data.isReplacementForUserId,
+      ],
+    );
+    return result.rows[0]!;
+  }
+
+  /**
+   * Mark a membership as REMOVED (used by renewal vote NO, rebalance moves,
+   * admin dissolves).
+   */
+  async removeMembership(membershipId: string, tx?: import('pg').PoolClient): Promise<void> {
+    const runner = tx ?? pool;
+    await runner.query(
+      `UPDATE tenant_memberships SET status = 'REMOVED' WHERE id = $1`,
+      [membershipId],
+    );
   }
 }
 

@@ -43,3 +43,8 @@ export {
   superAdminPayoutsRouter,
   tenantPayoutVisibilityRouter,
 } from './payouts/payouts.routes';
+
+export {
+  tenantRenewalRouter,
+  branchAdminRenewalRouter,
+} from './tenants/tenure-renewal.routes';

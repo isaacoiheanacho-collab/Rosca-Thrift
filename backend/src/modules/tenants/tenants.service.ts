@@ -1,8 +1,9 @@
 /**
- * Tenants service — business logic.
+ * Tenants service - business logic.
  *
  * Phase 1.4c: adds member listing + branch summary endpoints.
  * Phase 1.7:  lazy cycle advancement on dashboard load.
+ * Phase 1.8:  tenure renewal - lazy check on dashboard load.
  */
 
 import { logger } from '../../logger';
@@ -10,6 +11,7 @@ import { AppError, ConflictError, NotFoundError } from '../../errors';
 import { record } from '../audit/audit.service';
 import { usersRepository } from '../users/users.repository';
 import { cycleAdvancementService } from './cycle-advancement.service';
+import { tenureRenewalService } from './tenure-renewal.service';
 import {
   tenantsRepository,
   type TenantMembershipRow,
@@ -28,10 +30,14 @@ export interface TenantDto {
   name: string | null;
   status: TenantStatus;
   currentCycle: number;
+  currentTenure: number;
   memberCount: number;
   activatedAt: string | null;
   completedAt: string | null;
   createdAt: string;
+  renewalState: string;
+  renewalVoteEndsAt: string | null;
+  renewalFillEndsAt: string | null;
 }
 
 export interface TenantMemberDto {
@@ -68,10 +74,14 @@ async function toTenantDto(row: TenantRow): Promise<TenantDto> {
     name: row.name,
     status: row.status,
     currentCycle: row.current_cycle,
+    currentTenure: row.current_tenure,
     memberCount,
     activatedAt: row.activated_at?.toISOString() ?? null,
     completedAt: row.completed_at?.toISOString() ?? null,
     createdAt: row.created_at.toISOString(),
+    renewalState: row.renewal_state,
+    renewalVoteEndsAt: row.renewal_vote_ends_at?.toISOString() ?? null,
+    renewalFillEndsAt: row.renewal_fill_ends_at?.toISOString() ?? null,
   };
 }
 
@@ -108,12 +118,18 @@ export class TenantsService {
   }
 
   async getMyTenant(userId: string): Promise<MyTenantDto | null> {
-    // Lazy cycle-advancement trigger: if the tenant's current cycle is finished
-    // (payout confirmed) but not yet advanced, advance it now.
+    // Lazy cycle-advancement trigger.
     try {
       await cycleAdvancementService.advanceForUser(userId);
     } catch (err) {
       logger.error({ err, userId }, 'Lazy cycle advancement failed');
+    }
+
+    // Lazy renewal-window trigger (vote close + fill window close).
+    try {
+      await tenureRenewalService.lazyCheckForUser(userId);
+    } catch (err) {
+      logger.error({ err, userId }, 'Lazy renewal check failed');
     }
 
     const membership = await tenantsRepository.findMembershipByUser(userId);

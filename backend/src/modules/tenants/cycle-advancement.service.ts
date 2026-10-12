@@ -1,7 +1,7 @@
 /**
  * Cycle advancement service.
  *
- * Event-driven — no cron, no scheduler. Called from:
+ * Event-driven - no cron, no scheduler. Called from:
  *   1. payoutsService.confirmPayout     (after ledger debit)
  *   2. tenantsService.getMyTenant       (lazy check on dashboard load)
  *   3. contributionsService.getOrCreateCurrentIntent (lazy check)
@@ -11,21 +11,15 @@
  *   - Check: status=ACTIVE
  *   - Check: current cycle's payout_intent.state = CONFIRMED
  *   - If both true: advance the cycle (increment, reset timestamps, gen intents)
- *   - If cycle was 12: mark tenant COMPLETED
+ *   - If cycle was 12: mark tenure COMPLETE and open renewal vote
  *   - If any check fails: silently do nothing (idempotent)
- *
- * NOTE: This service intentionally does NOT check cycle_ends_at / time.
- * The trigger is "payout confirmed for current cycle" — a human action.
- * The 30-day window is a business rule, not a technical gate.
- *
- * Concurrency: uses a transaction with SELECT FOR UPDATE so parallel calls
- * can't double-advance.
  */
 
 import { logger } from '../../logger';
 import { withTransaction } from '../../db';
 import { tenantsRepository, type TenantRow } from './tenants.repository';
 import { rotationService } from '../payouts/rotation.service';
+import { tenureRenewalService } from './tenure-renewal.service';
 
 export interface AdvancementResult {
   advanced: boolean;
@@ -33,6 +27,7 @@ export interface AdvancementResult {
   previousCycle?: number;
   newCycle?: number;
   tenantCompleted?: boolean;
+  renewalOpened?: boolean;
   newPayoutIntentId?: string;
   newFeeIntentId?: string;
 }
@@ -45,19 +40,16 @@ interface TxResult {
   previousCycle?: number;
   newCycle?: number;
   tenantCompleted?: boolean;
+  renewalOpened?: boolean;
 }
 
 export class CycleAdvancementService {
   async advanceIfCycleComplete(tenantId: string): Promise<AdvancementResult> {
-    // Fast pre-check (no lock) to avoid opening a transaction for tenants that
-    // obviously don't need advancement.
     const pre = await tenantsRepository.findById(tenantId);
     if (!pre) return { advanced: false, reason: 'tenant_not_found' };
     if (pre.status !== 'ACTIVE') return { advanced: false, reason: 'not_active' };
 
-    // Transaction: lock, check, advance if conditions met.
     const txResult: TxResult = await withTransaction(async (tx) => {
-      // Lock the tenant row
       const lockRes = await tx.query<TenantRow>(
         `SELECT * FROM tenants WHERE id = $1 FOR UPDATE`,
         [tenantId],
@@ -65,7 +57,6 @@ export class CycleAdvancementService {
       const tenant = lockRes.rows[0];
       if (!tenant) return { advanced: false, reason: 'tenant_not_found' };
 
-      // Re-check inside the lock
       if (tenant.status !== 'ACTIVE') return { advanced: false, reason: 'not_active' };
 
       // Check the current cycle's payout_intent state
@@ -79,33 +70,29 @@ export class CycleAdvancementService {
       if (!payout) {
         logger.warn(
           { tenantId, tenure: tenant.current_tenure, cycle: tenant.current_cycle },
-          'CycleAdvancement: no payout_intent for current cycle — cannot advance',
+          'CycleAdvancement: no payout_intent for current cycle - cannot advance',
         );
         return { advanced: false, reason: 'no_payout_intent' };
       }
       if (payout.state !== 'CONFIRMED') {
         logger.info(
           { tenantId, cycle: tenant.current_cycle, state: payout.state },
-          'CycleAdvancement: current payout not yet confirmed — waiting',
+          'CycleAdvancement: current payout not yet confirmed - waiting',
         );
         return { advanced: false, reason: 'payout_not_confirmed' };
       }
 
-      // Idempotency guard: if cycle_advanced_at is newer than cycle_started_at,
-      // someone already advanced this tenant.
-      if (
-        tenant.cycle_advanced_at &&
-        tenant.cycle_started_at &&
-        tenant.cycle_advanced_at.getTime() >= tenant.cycle_started_at.getTime()
-      ) {
-        return { advanced: false, reason: 'already_advanced' };
-      }
+      // CHANGED: Idempotency is enforced by the payout state check above.
+      // Once we advance, the NEW cycle's payout is PENDING (freshly created),
+      // so the next call will find it not CONFIRMED and will not double-advance.
+      // The old cycle_advanced_at >= cycle_started_at guard was broken because
+      // Postgres NOW() returns the same value within a transaction, making the
+      // guard always true after the first advancement.
 
       const previousCycle = tenant.current_cycle;
       const isFinalCycle = previousCycle >= CYCLES_PER_TENURE;
 
       if (isFinalCycle) {
-        // Complete the tenure
         await tx.query(
           `UPDATE tenants
            SET status = 'COMPLETED',
@@ -117,17 +104,17 @@ export class CycleAdvancementService {
 
         logger.info(
           { tenantId, tenure: tenant.current_tenure },
-          'CycleAdvancement: tenant COMPLETED (tenure finished)',
+          'CycleAdvancement: tenure complete - opening renewal',
         );
 
         return {
           advanced: true,
           previousCycle,
           tenantCompleted: true,
+          renewalOpened: true,
         };
       }
 
-      // Advance to next cycle
       const newCycle = previousCycle + 1;
       await tx.query(
         `UPDATE tenants
@@ -148,15 +135,26 @@ export class CycleAdvancementService {
       };
     });
 
-    // If we advanced, generate next cycle's intents in a separate call.
-    // This is safe because ensureIntentsForCycle is itself idempotent.
     const result: AdvancementResult = { ...txResult };
+
+    if (result.renewalOpened) {
+      try {
+        await tenureRenewalService.openRenewalForTenant(tenantId);
+        logger.info({ tenantId }, 'CycleAdvancement: renewal opened');
+      } catch (err) {
+        logger.error({ err, tenantId }, 'CycleAdvancement: failed to open renewal');
+      }
+      return result;
+    }
 
     if (result.advanced && result.newCycle && !result.tenantCompleted) {
       try {
+        const tenant = await tenantsRepository.findById(tenantId);
+        const tenureForIntents = tenant?.current_tenure ?? 1;
+
         const intents = await rotationService.ensureIntentsForCycle(
           tenantId,
-          /* tenure */ 1, // TODO: multi-tenure not yet implemented; tenure=1 always
+          tenureForIntents,
           result.newCycle,
         );
         result.newPayoutIntentId = intents.payoutIntentId;
@@ -165,6 +163,7 @@ export class CycleAdvancementService {
         logger.info(
           {
             tenantId,
+            tenure: tenureForIntents,
             newCycle: result.newCycle,
             payoutIntentId: intents.payoutIntentId,
             feeIntentId: intents.feeIntentId,
@@ -182,10 +181,6 @@ export class CycleAdvancementService {
     return result;
   }
 
-  /**
-   * Look up the tenant for a user, then attempt advancement.
-   * Convenience wrapper for lazy triggers.
-   */
   async advanceForUser(userId: string): Promise<AdvancementResult> {
     const membership = await tenantsRepository.findMembershipByUser(userId);
     if (!membership) return { advanced: false, reason: 'no_membership' };

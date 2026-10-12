@@ -34,6 +34,8 @@ import {
   branchAdminPayoutsRouter,
   superAdminPayoutsRouter,
   tenantPayoutVisibilityRouter,
+  tenantRenewalRouter,
+  branchAdminRenewalRouter,
 } from './modules';
 import authSessionsRouter from './modules/auth/auth.sessions';
 
@@ -111,6 +113,10 @@ app.use('/api/branch-admin/payouts', branchAdminPayoutsRouter);
 // ---- Tenant-wide visibility (members) ----
 app.use('/api/tenants/me', tenantVisibilityRouter);
 app.use('/api/tenants/me', tenantPayoutVisibilityRouter);
+app.use('/api/tenants/me', tenantRenewalRouter);
+
+// ---- Tenure renewal (branch admin) ----
+app.use('/api/branch-admin/tenants', branchAdminRenewalRouter);
 
 // ---- Receipts ----
 app.use('/api/receipts', receiptsRouter);

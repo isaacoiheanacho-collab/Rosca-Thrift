@@ -21,7 +21,8 @@
     "test:visibility": "ts-node --transpile-only scripts/test-tenant-visibility.ts",
     "test:idor": "ts-node --transpile-only scripts/test-idor.ts",
     "test:payout": "ts-node --transpile-only scripts/test-payout-flow.ts",
-    "test:cycle-advance": "ts-node --transpile-only scripts/test-cycle-advancement.ts"
+    "test:cycle-advance": "ts-node --transpile-only scripts/test-cycle-advancement.ts",
+    "test:renewal": "ts-node --transpile-only scripts/test-tenure-renewal.ts"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.1146.0",
