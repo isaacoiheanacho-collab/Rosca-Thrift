@@ -13,6 +13,13 @@
  *   - cycleAdvancementService (opens renewal on cycle 12)
  *   - provisioner (checks for REPLACING tenant before FILLING)
  *   - lazy trigger on dashboard load (checks window expiry)
+ *
+ * Notifications:
+ *   - On open: notify all tenant members
+ *   - On NO vote: notify branch admins (need replacement)
+ *   - On replacement assigned: notify all tenant members
+ *   - On tenure renewed: notify all tenant members
+ *   - On dissolved: notify all tenant members
  */
 
 import { logger } from '../../logger';
@@ -27,6 +34,7 @@ import {
 import { tenureRenewalRepository } from './tenure-renewal.repository';
 import { rotationService } from '../payouts/rotation.service';
 import { usersRepository } from '../users/users.repository';
+import { notificationsService } from '../notifications/notifications.service';
 
 export interface RequestMeta {
   ipAddress?: string;
@@ -67,11 +75,6 @@ export class TenureRenewalService {
   // Step 1: open renewal after cycle 12 payout confirmed
   // ---------------------------------------------------------------
 
-  /**
-   * Called by cycleAdvancementService when cycle 12 completes.
-   * Creates 12 renewal rows, sets tenant state = VOTING.
-   * Idempotent.
-   */
   async openRenewalForTenant(tenantId: string): Promise<void> {
     const tenant = await tenantsRepository.findById(tenantId);
     if (!tenant) throw new NotFoundError('Tenant');
@@ -131,6 +134,17 @@ export class TenureRenewalService {
     });
 
     logger.info({ tenantId, closingTenure, voteEndsAt }, 'Tenure renewal opened');
+
+    // Notify all tenant members (best-effort)
+    try {
+      await notificationsService.notifyRenewalOpened({
+        tenantId,
+        branchId: tenant.branch_id,
+        closingTenure,
+      });
+    } catch (err) {
+      logger.error({ err, tenantId }, 'Renewal opened notification failed');
+    }
   }
 
   // ---------------------------------------------------------------
@@ -162,7 +176,6 @@ export class TenureRenewalService {
     }
 
     if (tenant.renewal_vote_ends_at && tenant.renewal_vote_ends_at.getTime() < Date.now()) {
-      // Vote window closed - trigger finalize
       await this.finalizeVotingPhase(tenant.id);
       throw new ConflictError('Voting window has closed', 'RENEWAL_VOTE_CLOSED');
     }
@@ -183,13 +196,11 @@ export class TenureRenewalService {
       await tenureRenewalRepository.castVote(renewal.id, vote, tx);
 
       if (vote === 'NO') {
-        // Remove membership immediately - slot freed for replacement.
         await tx.query(
           `UPDATE tenant_memberships SET status = 'REMOVED' WHERE id = $1`,
           [renewal.membership_id],
         );
 
-        // Mark the tenant as REPLACING if not already.
         await tx.query(
           `UPDATE tenants
            SET renewal_state = 'REPLACING',
@@ -218,7 +229,21 @@ export class TenureRenewalService {
       'Renewal vote cast',
     );
 
-    // Try to finalize (in case this vote completes the set).
+    // If NO, notify branch admins to find a replacement (best-effort)
+    if (vote === 'NO') {
+      try {
+        const saver = await usersRepository.findById(userId);
+        await notificationsService.notifyRenewalDeclined({
+          tenantId: tenant.id,
+          branchId: tenant.branch_id,
+          slotNumber: renewal.slot_number,
+          memberName: saver?.full_name ?? 'A member',
+        });
+      } catch (err) {
+        logger.error({ err, tenantId: tenant.id }, 'Renewal declined notification failed');
+      }
+    }
+
     await this.tryFinalize(tenant.id);
 
     return this.getStatus(tenant.id);
@@ -228,11 +253,6 @@ export class TenureRenewalService {
   // Step 3: finalize voting -> transition to REPLACING if any NO
   // ---------------------------------------------------------------
 
-  /**
-   * Called after every vote and on window expiry.
-   * If all votes are YES -> tenure 2 begins immediately.
-   * If any NO -> set fill window, state = REPLACING.
-   */
   private async finalizeVotingPhase(tenantId: string): Promise<void> {
     const tenant = await tenantsRepository.findById(tenantId);
     if (!tenant) return;
@@ -242,13 +262,11 @@ export class TenureRenewalService {
       tenant.current_tenure,
     );
 
-    // Everyone voted yes -> tenure 2 starts now
     if (counts.yes === 12) {
       await this.activateNextTenure(tenantId);
       return;
     }
 
-    // If vote window has passed and some didn't vote -> treat non-votes as NO.
     if (
       counts.pending > 0 &&
       tenant.renewal_vote_ends_at &&
@@ -288,16 +306,10 @@ export class TenureRenewalService {
   // Step 4: assign replacement when a new signup lands
   // ---------------------------------------------------------------
 
-  /**
-   * Called by provisioning service when a new user completes KYC.
-   * Returns the tenant + slot if there's a REPLACING tenant waiting,
-   * or null if the caller should fall through to normal provisioning.
-   */
   async tryAssignReplacement(
     branchId: string,
     newUserId: string,
   ): Promise<{ tenantId: string; slotNumber: number } | null> {
-    // Find a REPLACING tenant in this branch
     const result = await pool.query<TenantRow>(
       `SELECT * FROM tenants
        WHERE branch_id = $1 AND renewal_state = 'REPLACING'
@@ -308,7 +320,6 @@ export class TenureRenewalService {
     const tenant = result.rows[0];
     if (!tenant) return null;
 
-    // Find an unfilled slot
     const unfilled = await tenureRenewalRepository.findUnfilledSlots(
       tenant.id,
       tenant.current_tenure,
@@ -319,7 +330,6 @@ export class TenureRenewalService {
 
     try {
       await withTransaction(async (tx) => {
-        // Create new membership for the replacement
         const membershipRes = await tx.query<TenantMembershipRow>(
           `INSERT INTO tenant_memberships
              (tenant_id, user_id, slot_number, tenure_joined, is_replacement_for_user_id)
@@ -329,7 +339,6 @@ export class TenureRenewalService {
         );
         const membership = membershipRes.rows[0]!;
 
-        // Update the renewal row
         await tenureRenewalRepository.markReplaced(
           slot.id,
           newUserId,
@@ -358,7 +367,19 @@ export class TenureRenewalService {
         'Replacement assigned to renewing tenant',
       );
 
-      // Check if all slots are now filled
+      // Notify all tenant members (best-effort)
+      try {
+        const newSaver = await usersRepository.findById(newUserId);
+        await notificationsService.notifyReplacementAssigned({
+          tenantId: tenant.id,
+          branchId: tenant.branch_id,
+          replacementName: newSaver?.full_name ?? 'A new member',
+          slotNumber: slot.slot_number,
+        });
+      } catch (err) {
+        logger.error({ err, tenantId: tenant.id }, 'Replacement assigned notification failed');
+      }
+
       await this.tryFinalize(tenant.id);
 
       return { tenantId: tenant.id, slotNumber: slot.slot_number };
@@ -387,7 +408,6 @@ export class TenureRenewalService {
       return;
     }
 
-    // Check if fill window expired -> attempt cross-tenant rebalance
     if (
       tenant.renewal_fill_ends_at &&
       tenant.renewal_fill_ends_at.getTime() <= Date.now()
@@ -401,8 +421,10 @@ export class TenureRenewalService {
   // ---------------------------------------------------------------
 
   private async activateNextTenure(tenantId: string): Promise<void> {
+    let renewed = false;
+    let nextTenureFinal = 0;
+
     await withTransaction(async (tx) => {
-      // Lock tenant
       const lock = await tx.query<TenantRow>(
         `SELECT * FROM tenants WHERE id = $1 FOR UPDATE`,
         [tenantId],
@@ -410,13 +432,11 @@ export class TenureRenewalService {
       const tenant = lock.rows[0];
       if (!tenant) throw new NotFoundError('Tenant');
 
-      if (tenant.renewal_state === 'RENEWED') return; // already done
+      if (tenant.renewal_state === 'RENEWED') return;
 
       const nextTenure = tenant.current_tenure + 1;
+      nextTenureFinal = nextTenure;
 
-      // Reactivate the memberships that voted YES (they're still ACTIVE)
-      // Members who voted NO were set to REMOVED - replacements are ACTIVE.
-      // Nothing to do here besides resetting tenant to ACTIVE at cycle 1.
       await tx.query(
         `UPDATE tenants
          SET renewal_state = 'RENEWED',
@@ -452,6 +472,8 @@ export class TenureRenewalService {
         { tenantId, fromTenure: tenant.current_tenure, toTenure: nextTenure },
         'Tenure renewed',
       );
+
+      renewed = true;
     });
 
     // Generate cycle-1 intents for the new tenure (outside the tx - idempotent)
@@ -461,6 +483,19 @@ export class TenureRenewalService {
         await rotationService.ensureIntentsForCycle(tenantId, tenant.current_tenure, 1);
       } catch (err) {
         logger.error({ err, tenantId }, 'Failed to generate tenure-2 cycle-1 intents');
+      }
+    }
+
+    // Notify all tenant members (best-effort)
+    if (renewed && tenant) {
+      try {
+        await notificationsService.notifyTenureRenewed({
+          tenantId,
+          branchId: tenant.branch_id,
+          newTenure: nextTenureFinal,
+        });
+      } catch (err) {
+        logger.error({ err, tenantId }, 'Tenure renewed notification failed');
       }
     }
   }
@@ -473,7 +508,6 @@ export class TenureRenewalService {
     const tenant = await tenantsRepository.findById(tenantId);
     if (!tenant) return;
 
-    // Find FILLING tenants in the same branch (excluding this one)
     const fillingRes = await pool.query<TenantRow>(
       `SELECT * FROM tenants
        WHERE branch_id = $1 AND status = 'FILLING' AND id != $2
@@ -493,7 +527,6 @@ export class TenureRenewalService {
     const renewingActive = await tenantsRepository.findMembershipsByTenant(tenantId);
     const renewingCount = renewingActive.length;
 
-    // Compute each FILLING tenant's member count.
     const fillingCounts: Array<{ tenant: TenantRow; count: number }> = [];
     for (const ft of fillingTenants) {
       const members = await tenantsRepository.findMembershipsByTenant(ft.id);
@@ -504,10 +537,8 @@ export class TenureRenewalService {
     const highest = fillingCounts[0]!;
 
     if (renewingCount >= highest.count) {
-      // Renewing has more (or equal) members -> pull from filling into renewing
       await this.pullFromFillingIntoRenewing(tenant, renewingCount, highest, fillingCounts);
     } else {
-      // Filling has more -> push renewing members into filling
       await this.pushRenewingIntoFilling(tenant, renewingActive, highest);
     }
   }
@@ -549,13 +580,11 @@ export class TenureRenewalService {
       const slot = unfilled[i]!;
 
       await withTransaction(async (tx) => {
-        // Remove from source tenant
         await tx.query(
           `UPDATE tenant_memberships SET status = 'REMOVED' WHERE id = $1`,
           [fromMember.id],
         );
 
-        // Insert into renewing tenant at the vacant slot
         const ins = await tx.query<TenantMembershipRow>(
           `INSERT INTO tenant_memberships
              (tenant_id, user_id, slot_number, tenure_joined, is_replacement_for_user_id)
@@ -639,13 +668,11 @@ export class TenureRenewalService {
       const slot = freeSlots[i]!;
 
       await withTransaction(async (tx) => {
-        // Remove from renewing tenant
         await tx.query(
           `UPDATE tenant_memberships SET status = 'REMOVED' WHERE id = $1`,
           [member.id],
         );
 
-        // Insert into filling tenant (fresh slot, tenure_joined=1 - that tenant's tenure)
         const ins = await tx.query<TenantMembershipRow>(
           `INSERT INTO tenant_memberships
              (tenant_id, user_id, slot_number, tenure_joined)
@@ -678,7 +705,6 @@ export class TenureRenewalService {
       'Rebalance push complete',
     );
 
-    // If the renewing tenant is now empty (all members moved out), dissolve it.
     const remaining = await tenantsRepository.findMembershipsByTenant(renewingTenant.id);
     if (remaining.length === 0) {
       await this.dissolveTenant(
@@ -688,7 +714,6 @@ export class TenureRenewalService {
     } else if (remaining.length === 12) {
       await this.activateNextTenure(renewingTenant.id);
     } else {
-      // Still short - admin must intervene
       logger.warn(
         { tenantId: renewingTenant.id, remaining: remaining.length },
         'Rebalance incomplete - admin intervention required',
@@ -780,6 +805,19 @@ export class TenureRenewalService {
 
     logger.info({ tenantId, slotNumber, newUserId, actorId }, 'Admin assigned replacement');
 
+    // Notify all tenant members (best-effort)
+    try {
+      const newSaver = await usersRepository.findById(newUserId);
+      await notificationsService.notifyReplacementAssigned({
+        tenantId,
+        branchId: tenant.branch_id,
+        replacementName: newSaver?.full_name ?? 'A new member',
+        slotNumber,
+      });
+    } catch (err) {
+      logger.error({ err, tenantId }, 'Admin replacement notification failed');
+    }
+
     await this.tryFinalize(tenantId);
     return this.getStatus(tenantId);
   }
@@ -809,6 +847,9 @@ export class TenureRenewalService {
   }
 
   private async dissolveTenant(tenantId: string, reason: string): Promise<void> {
+    const tenant = await tenantsRepository.findById(tenantId);
+    const branchId = tenant?.branch_id ?? null;
+
     await withTransaction(async (tx) => {
       await tx.query(
         `UPDATE tenants
@@ -839,6 +880,18 @@ export class TenureRenewalService {
     });
 
     logger.info({ tenantId, reason }, 'Tenant dissolved');
+
+    // Notify all tenant members (best-effort)
+    if (branchId) {
+      try {
+        await notificationsService.notifyTenantDissolved({
+          tenantId,
+          branchId,
+        });
+      } catch (err) {
+        logger.error({ err, tenantId }, 'Tenant dissolved notification failed');
+      }
+    }
   }
 
   // ---------------------------------------------------------------
@@ -921,10 +974,6 @@ export class TenureRenewalService {
     }));
   }
 
-  /**
-   * Lazy trigger: called when a member loads their dashboard.
-   * Checks if the vote or fill window has expired and finalizes.
-   */
   async lazyCheckForUser(userId: string): Promise<void> {
     const membership = await tenantsRepository.findMembershipByUser(userId);
     if (!membership) return;

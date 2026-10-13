@@ -11,6 +11,7 @@ import { AppError, ConflictError, NotFoundError } from '../../errors';
 import { record } from '../audit/audit.service';
 import { usersRepository } from '../users/users.repository';
 import { provisioningService } from '../tenants/provisioning.service';
+import { notificationsService } from '../notifications/notifications.service';
 import { kycRepository, type KycSubmissionRow } from './kyc.repository';
 import type { SubmitKycInput } from './kyc.schemas';
 
@@ -36,6 +37,7 @@ export interface KycSubmissionDto {
 
 async function toDto(row: KycSubmissionRow): Promise<KycSubmissionDto> {
   const selfieUrl = await getPresignedDownloadUrl(row.selfie_object_key, 300);
+
   return {
     id: row.id,
     userId: row.user_id,
@@ -61,6 +63,7 @@ export class KycService {
   ): Promise<KycSubmissionDto> {
     const user = await usersRepository.findById(userId);
     if (!user) throw new NotFoundError('User');
+
     if (!user.branch_id) {
       throw new AppError({
         code: 'KYC_NO_BRANCH',
@@ -68,6 +71,7 @@ export class KycService {
         message: 'User is not assigned to a branch',
       });
     }
+
     if (user.kyc_verified_at) {
       throw new ConflictError('KYC already approved', 'KYC_ALREADY_APPROVED');
     }
@@ -137,6 +141,7 @@ export class KycService {
   ): Promise<KycSubmissionDto> {
     const row = await kycRepository.findById(submissionId);
     if (!row) throw new NotFoundError('KYC submission');
+
     if (row.status !== 'PENDING') {
       throw new ConflictError('Submission is not pending', 'KYC_NOT_PENDING');
     }
@@ -157,11 +162,14 @@ export class KycService {
     logger.info({ submissionId, reviewerId, branchId: row.branch_id }, 'KYC approved');
 
     // Auto-provision into a tenant (idempotent — safe to re-run)
+    let provisionedTenantId: string | null = null;
     try {
       const result = await provisioningService.provisionUserToTenant(
         row.user_id,
         row.branch_id,
       );
+      provisionedTenantId = result.tenantId;
+
       logger.info(
         {
           userId: row.user_id,
@@ -176,6 +184,17 @@ export class KycService {
       logger.error({ err, userId: row.user_id }, 'Auto-provisioning failed after KYC approval');
     }
 
+    // Notify the saver their KYC is approved (best-effort)
+    try {
+      await notificationsService.notifyKycApproved({
+        userId: row.user_id,
+        branchId: row.branch_id,
+      });
+    } catch (err) {
+      logger.error({ err, userId: row.user_id }, 'KYC approved notification failed');
+    }
+
+    void provisionedTenantId; // reserved for future use (e.g., notify tenant members)
     return toDto(updated);
   }
 
@@ -187,6 +206,7 @@ export class KycService {
   ): Promise<KycSubmissionDto> {
     const row = await kycRepository.findById(submissionId);
     if (!row) throw new NotFoundError('KYC submission');
+
     if (row.status !== 'PENDING') {
       throw new ConflictError('Submission is not pending', 'KYC_NOT_PENDING');
     }

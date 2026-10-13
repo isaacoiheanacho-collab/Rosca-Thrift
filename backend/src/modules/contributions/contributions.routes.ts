@@ -12,6 +12,7 @@
  *   POST  /api/branch-admin/contributions/:intentId/confirm    - confirm
  *   POST  /api/branch-admin/contributions/:intentId/reject     - reject
  *   GET   /api/branch-admin/contributions/tenants/:tenantId/cycle - cycle status
+ *   POST  /api/branch-admin/contributions/tenants/:tenantId/remind - send reminder
  *
  * Tenant-wide visibility (any member of a tenant):
  *   GET /api/tenants/me/contributions   - all 12 members' statuses
@@ -23,13 +24,14 @@ import { Router, type Request, type Response, type NextFunction } from 'express'
 import multer from 'multer';
 import { requireAuth, requireBranchAdmin } from '../../middleware/auth';
 import { validate } from '../../middleware/validate';
-import { AppError } from '../../errors';
+import { AppError, NotFoundError } from '../../errors';
 import { contributionsService, type RequestMeta } from './contributions.service';
 import { tenantsRepository } from '../tenants/tenants.repository';
 import {
   ConfirmContributionSchema,
   ListPendingSchema,
   RejectContributionSchema,
+  RemindQuerySchema,
   UploadReceiptSchema,
 } from './contributions.schemas';
 
@@ -159,7 +161,6 @@ branchAdminContributionsRouter.get(
         cycle?: number;
       };
       const user = req.user!;
-      // Branch admin → only their branch. Super admin → all branches.
       const branchFilter = user.role === 'BRANCH_ADMIN' ? user.branchId : null;
 
       const result = await contributionsService.listPendingForAdmin(branchFilter, {
@@ -229,6 +230,31 @@ branchAdminContributionsRouter.get(
         tenant.current_cycle,
       );
       res.json({ ok: true, data: status });
+    } catch (err) {
+      next(err);
+    }
+  },
+);
+
+branchAdminContributionsRouter.post(
+  '/tenants/:tenantId/remind',
+  validate({ query: RemindQuerySchema }),
+  async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const tenantId = String(req.params.tenantId);
+      const tenant = await tenantsRepository.findById(tenantId);
+      if (!tenant) {
+        throw new NotFoundError('Tenant');
+      }
+      if (req.user!.role === 'BRANCH_ADMIN' && tenant.branch_id !== req.user!.branchId) {
+        throw new AppError({ code: 'AUTH_BRANCH_SCOPE', httpStatus: 403, message: 'Not permitted' });
+      }
+      const result = await contributionsService.sendDepositReminder(
+        tenantId,
+        req.user!.sub,
+        metaOf(req),
+      );
+      res.json({ ok: true, data: result });
     } catch (err) {
       next(err);
     }

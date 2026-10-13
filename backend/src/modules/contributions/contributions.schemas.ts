@@ -39,8 +39,12 @@ export const ListPendingSchema = z.object({
   cycle: z.coerce.number().int().min(1).max(12).optional(),
 });
 
+/** Query params for the deposit reminder endpoint (reserved; no params yet). */
+export const RemindQuerySchema = z.object({});
+
 export type CreateIntentInput = z.infer<typeof CreateIntentSchema>;
 export type ConfirmContributionInput = z.infer<typeof ConfirmContributionSchema>;
 export type RejectContributionInput = z.infer<typeof RejectContributionSchema>;
 export type UploadReceiptInput = z.infer<typeof UploadReceiptSchema>;
 export type ListPendingInput = z.infer<typeof ListPendingSchema>;
+export type RemindQueryInput = z.infer<typeof RemindQuerySchema>;

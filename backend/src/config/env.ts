@@ -44,6 +44,11 @@ const EnvSchema = z.object({
   JWT_ACCESS_TTL: z.coerce.number().int().positive().default(900),
   JWT_REFRESH_TTL: z.coerce.number().int().positive().default(2_592_000),
 
+  // Web Push (VAPID) — optional; push disabled if unset
+  VAPID_PUBLIC_KEY: z.string().min(20).optional(),
+  VAPID_PRIVATE_KEY: z.string().min(20).optional(),
+  VAPID_SUBJECT: z.string().min(5).default('mailto:noreply@rosca.local'),
+
   CORS_ORIGINS: z.string().default('http://localhost:3000'),
 
   LOG_LEVEL: z.enum(['fatal', 'error', 'warn', 'info', 'debug', 'trace']).default('info'),

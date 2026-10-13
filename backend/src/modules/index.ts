@@ -25,6 +25,11 @@ export {
 } from './tenants/tenants.routes';
 
 export {
+  tenantRenewalRouter,
+  branchAdminRenewalRouter,
+} from './tenants/tenure-renewal.routes';
+
+export {
   contributionsRouter,
   branchAdminContributionsRouter,
   tenantVisibilityRouter,
@@ -44,7 +49,4 @@ export {
   tenantPayoutVisibilityRouter,
 } from './payouts/payouts.routes';
 
-export {
-  tenantRenewalRouter,
-  branchAdminRenewalRouter,
-} from './tenants/tenure-renewal.routes';
+export { default as notificationsRouter } from './notifications/notifications.routes';

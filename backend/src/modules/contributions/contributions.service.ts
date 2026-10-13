@@ -13,6 +13,8 @@ import { tenantsRepository } from '../tenants/tenants.repository';
 import { cycleAdvancementService } from '../tenants/cycle-advancement.service';
 import { record } from '../audit/audit.service';
 import { ledgerService } from '../ledger/ledger.service';
+import { usersRepository } from '../users/users.repository';
+import { notificationsService } from '../notifications/notifications.service';
 import {
   contributionsRepository,
   type ContributionIntentRow,
@@ -138,6 +140,7 @@ function intentToDto(
   targetAccount: ContributionIntentDto['targetAccount'],
 ): ContributionIntentDto {
   const now = Date.now();
+
   return {
     id: row.id,
     tenantId: row.tenant_id,
@@ -173,6 +176,7 @@ function contributionToDto(row: ContributionRow): ContributionDto {
 
 async function receiptToDto(row: ReceiptRow): Promise<ReceiptDto> {
   const url = await getPresignedDownloadUrl(row.object_key, 300);
+
   return {
     id: row.id,
     purpose: row.purpose,
@@ -300,7 +304,9 @@ export class ContributionsService {
       sort_code: string;
     }>('SELECT * FROM branch_pool_accounts WHERE branch_id = $1', [branchId]);
     const row = result.rows[0];
+
     if (!row) return null;
+
     return {
       accountHolderName: row.account_holder_name,
       bankName: row.bank_name,
@@ -328,6 +334,7 @@ export class ContributionsService {
       contributionsRepository.listIntentsByTenantCycle(tenantId, tenure, cycle),
       contributionsRepository.listContributionsByTenantCycle(tenantId, tenure, cycle),
     ]);
+
     return {
       intents: intents.map((i) => intentToDto(i, null)),
       contributions: contributions.map(contributionToDto),
@@ -413,6 +420,7 @@ export class ContributionsService {
   async listTenantReceipts(tenantId: string, limit = 100): Promise<TenantReceiptDto[]> {
     const rows = await contributionsRepository.listReceiptsByTenantWithIntent(tenantId, limit);
     const dtos: TenantReceiptDto[] = [];
+
     for (const r of rows) {
       const url = await getPresignedDownloadUrl(r.object_key, 300);
       dtos.push({
@@ -430,6 +438,7 @@ export class ContributionsService {
         createdAt: r.created_at.toISOString(),
       });
     }
+
     return dtos;
   }
 
@@ -503,6 +512,22 @@ export class ContributionsService {
       },
     });
 
+    // Notify all tenant members (best-effort)
+    try {
+      const saver = await usersRepository.findById(intent.user_id);
+      await notificationsService.notifyContributionConfirmed({
+        tenantId: intent.tenant_id,
+        branchId: intent.branch_id,
+        saverUserId: intent.user_id,
+        saverName: saver?.full_name ?? 'A member',
+        cycle: intent.cycle,
+        amount,
+        contributionId: created.id,
+      });
+    } catch (err) {
+      logger.error({ err, intentId: intent.id }, 'Contribution confirmed notification failed');
+    }
+
     logger.info(
       { contributionId: created.id, intentId: intent.id, adminId },
       'Contribution confirmed',
@@ -540,6 +565,20 @@ export class ContributionsService {
       metadata: { reason, tenantId: intent.tenant_id, userId: intent.user_id },
     });
 
+    try {
+      const saver = await usersRepository.findById(intent.user_id);
+      await notificationsService.notifyContributionRejected({
+        tenantId: intent.tenant_id,
+        branchId: intent.branch_id,
+        saverUserId: intent.user_id,
+        saverName: saver?.full_name ?? 'A member',
+        cycle: intent.cycle,
+        intentId: intent.id,
+      });
+    } catch (err) {
+      logger.error({ err, intentId: intent.id }, 'Contribution rejected notification failed');
+    }
+
     logger.info({ intentId: intent.id, adminId }, 'Contribution rejected');
   }
 
@@ -557,6 +596,7 @@ export class ContributionsService {
   ): Promise<ReceiptDto> {
     const intent = await contributionsRepository.findIntentById(input.intentId);
     if (!intent) throw new NotFoundError('Contribution intent');
+
     if (intent.user_id !== userId) {
       throw new AppError({
         code: 'RECEIPT_NOT_YOURS',
@@ -564,6 +604,7 @@ export class ContributionsService {
         message: 'This intent does not belong to you',
       });
     }
+
     if (intent.state === 'CONFIRMED') {
       throw new ConflictError('Intent already confirmed', 'CONTRIB_ALREADY_CONFIRMED');
     }
@@ -611,8 +652,71 @@ export class ContributionsService {
       metadata: { intentId: intent.id, objectKey },
     });
 
+    try {
+      const saver = await usersRepository.findById(userId);
+      await notificationsService.notifyContributionUploaded({
+        branchId: intent.branch_id,
+        tenantId: intent.tenant_id,
+        saverUserId: userId,
+        saverName: saver?.full_name ?? 'A member',
+        cycle: intent.cycle,
+        intentId: intent.id,
+      });
+    } catch (err) {
+      logger.error({ err, intentId: intent.id }, 'Contribution upload notification failed');
+    }
+
     logger.info({ receiptId: receipt.id, intentId: intent.id }, 'Receipt uploaded');
     return receiptToDto(receipt);
+  }
+
+  /**
+   * Branch admin fires a manual reminder to all active members of a tenant.
+   * Rate-limited to once per (tenant, cycle) per admin session.
+   */
+  async sendDepositReminder(
+    tenantId: string,
+    actorId: string,
+    meta: RequestMeta,
+  ): Promise<{ sent: number }> {
+    const tenant = await tenantsRepository.findById(tenantId);
+    if (!tenant) throw new NotFoundError('Tenant');
+
+    if (tenant.status !== 'ACTIVE') {
+      throw new ConflictError(
+        `Tenant is ${tenant.status.toLowerCase()}; reminders only apply to ACTIVE tenants`,
+        'REMINDER_TENANT_NOT_ACTIVE',
+      );
+    }
+
+    const members = await tenantsRepository.findMembershipsByTenant(tenantId);
+    const deadline =
+      tenant.cycle_contribution_deadline_at ??
+      new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
+
+    await notificationsService.notifyDepositReminder({
+      tenantId,
+      branchId: tenant.branch_id,
+      cycle: tenant.current_cycle,
+      deadlineAt: deadline,
+    });
+
+    await record({
+      actorId,
+      action: 'DEPOSIT_REMINDER_SENT',
+      entityType: 'tenant',
+      entityId: tenantId,
+      ipAddress: meta.ipAddress,
+      userAgent: meta.userAgent,
+      metadata: { cycle: tenant.current_cycle, memberCount: members.length },
+    });
+
+    logger.info(
+      { tenantId, cycle: tenant.current_cycle, members: members.length, actorId },
+      'Deposit reminder sent',
+    );
+
+    return { sent: members.length };
   }
 }
 

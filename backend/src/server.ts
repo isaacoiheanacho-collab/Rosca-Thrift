@@ -1,4 +1,5 @@
 import express, { type Request, type Response } from 'express';
+import { createServer } from 'node:http';
 import cors from 'cors';
 import helmet from 'helmet';
 import 'dotenv/config';
@@ -9,6 +10,8 @@ import { pool, testConnection } from './db';
 import { redis, testRedis, closeRedis } from './utils/redis';
 import { testS3 } from './utils/s3';
 import { startAllWorkers, stopAllWorkers } from './queue';
+import { initSocketIO, closeSocketIO } from './modules/realtime/socket';
+import { ensureWebPushInitialised } from './utils/web-push';
 import { requestId } from './middleware/requestId';
 import { errorHandler, notFoundHandler } from './middleware/errorHandler';
 import { generalLimiter, authLimiter } from './middleware/rateLimit';
@@ -24,6 +27,8 @@ import {
   tenantsRouter,
   branchAdminTenantsRouter,
   superAdminTenantsRouter,
+  tenantRenewalRouter,
+  branchAdminRenewalRouter,
   contributionsRouter,
   branchAdminContributionsRouter,
   tenantVisibilityRouter,
@@ -34,8 +39,7 @@ import {
   branchAdminPayoutsRouter,
   superAdminPayoutsRouter,
   tenantPayoutVisibilityRouter,
-  tenantRenewalRouter,
-  branchAdminRenewalRouter,
+  notificationsRouter,
 } from './modules';
 import authSessionsRouter from './modules/auth/auth.sessions';
 
@@ -121,6 +125,9 @@ app.use('/api/branch-admin/tenants', branchAdminRenewalRouter);
 // ---- Receipts ----
 app.use('/api/receipts', receiptsRouter);
 
+// ---- Notifications ----
+app.use('/api/notifications', notificationsRouter);
+
 // ---- Pool accounts / maintenance account ----
 app.use('/api/branch-admin/pool-account', branchAdminPoolAccountRouter);
 app.use('/api/super-admin/maintenance-account', superAdminMaintenanceAccountRouter);
@@ -132,18 +139,30 @@ app.use('/api/super-admin/branches', superAdminBranchesRouter);
 app.use(notFoundHandler);
 app.use(errorHandler);
 
+// ---- HTTP server + Socket.IO ----
+
+const httpServer = createServer(app);
+initSocketIO(httpServer);
+
 async function shutdown(signal: string): Promise<void> {
   logger.info(`Received ${signal}, shutting down...`);
-  await Promise.allSettled([stopAllWorkers(), pool.end(), closeRedis()]);
+  await Promise.allSettled([
+    stopAllWorkers(),
+    closeSocketIO(),
+    pool.end(),
+    closeRedis(),
+  ]);
+  httpServer.close();
   process.exit(0);
 }
 
 process.on('SIGINT', () => shutdown('SIGINT'));
 process.on('SIGTERM', () => shutdown('SIGTERM'));
 
-app.listen(env.PORT, () => {
+httpServer.listen(env.PORT, () => {
   logger.info(`ROSCA backend listening on http://localhost:${env.PORT}`);
   logger.info(`Health check: http://localhost:${env.PORT}/health`);
+  ensureWebPushInitialised();
   startAllWorkers();
 
   void (async () => {

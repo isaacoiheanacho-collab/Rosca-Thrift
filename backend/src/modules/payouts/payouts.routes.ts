@@ -11,6 +11,7 @@
  * Super admin:
  *   GET  /api/super-admin/payouts/fees/pending        - queue of fee receipts
  *   POST /api/super-admin/payouts/fees/:id/confirm    - confirm fee received
+ *   POST /api/super-admin/payouts/fees/:id/reject     - reject fee receipt
  *   GET  /api/super-admin/payouts/:id                 - view any payout
  *
  * Saver (tenant-scoped):
@@ -32,6 +33,7 @@ import {
   ListFeesQuerySchema,
   ListPayoutsQuerySchema,
   PayoutIdParamSchema,
+  RejectFeeSchema,
   UploadFeeReceiptSchema,
   UploadPayoutReceiptSchema,
 } from './payouts.schemas';
@@ -59,9 +61,6 @@ const upload = multer({
   },
 });
 
-/**
- * Resolve the "branch scope" for the current caller.
- */
 function resolveBranchScope(req: Request): string {
   const user = req.user!;
 
@@ -140,8 +139,6 @@ branchAdminPayoutsRouter.get(
   },
 );
 
-// NOTE: multer runs BEFORE validate — multer populates req.body from the
-// multipart form, then validate runs Zod on the populated object.
 branchAdminPayoutsRouter.post(
   '/fees/:id/receipt',
   upload.single('receipt'),
@@ -278,6 +275,24 @@ superAdminPayoutsRouter.post(
         metaOf(req),
       );
       res.json({ ok: true, data: result });
+    } catch (err) {
+      next(err);
+    }
+  },
+);
+
+superAdminPayoutsRouter.post(
+  '/fees/:id/reject',
+  validate({ params: FeeIntentIdParamSchema, body: RejectFeeSchema }),
+  async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const dto = await payoutsService.rejectFee(
+        String(req.params.id),
+        req.user!.sub,
+        req.body.reason,
+        metaOf(req),
+      );
+      res.json({ ok: true, data: dto });
     } catch (err) {
       next(err);
     }

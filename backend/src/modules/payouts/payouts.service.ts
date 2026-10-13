@@ -5,10 +5,13 @@
  *   1. Rotation service generates payout_intent + fee_intent (on cycle start).
  *   2. Branch admin uploads fee receipt.
  *   3. Super admin confirms fee → payout_intent.state = FEE_PAID.
+ *      OR super admin rejects fee → fee_intent.state = PENDING (retry).
  *   4. Branch admin uploads payout receipt.
  *   5. Branch admin marks done → payout_intent.state = CONFIRMED.
  *   6. Ledger: debit tenant pool (payout amount), credit platform (fee amount).
  *   7. After payout confirmed, trigger cycle advancement (event-driven).
+ *
+ * Notifications are fired at each state transition via notificationsService.
  */
 
 import { logger } from '../../logger';
@@ -18,7 +21,9 @@ import { uploadObject } from '../../utils/s3';
 import { record } from '../audit/audit.service';
 import { ledgerService } from '../ledger/ledger.service';
 import { usersRepository } from '../users/users.repository';
+import { branchesRepository } from '../branches/branches.repository';
 import { cycleAdvancementService } from '../tenants/cycle-advancement.service';
+import { notificationsService } from '../notifications/notifications.service';
 import { payoutsRepository, type PayoutIntentRow, type PlatformFeeIntentRow } from './payouts.repository';
 
 export interface RequestMeta {
@@ -70,6 +75,7 @@ export interface PlatformFeeIntentDto {
 
 async function payoutToDto(row: PayoutIntentRow): Promise<PayoutIntentDto> {
   const recipient = await usersRepository.findById(row.recipient_user_id);
+
   return {
     id: row.id,
     tenantId: row.tenant_id,
@@ -178,6 +184,7 @@ export class PayoutsService {
   ): Promise<PlatformFeeIntentDto> {
     const fee = await payoutsRepository.findFeeIntentById(feeIntentId);
     if (!fee) throw new NotFoundError('Fee intent');
+
     if (fee.branch_id !== branchId) {
       throw new AppError({
         code: 'AUTH_BRANCH_SCOPE',
@@ -185,6 +192,7 @@ export class PayoutsService {
         message: 'Not permitted for this branch',
       });
     }
+
     if (fee.state === 'CONFIRMED') {
       throw new ConflictError('Fee already confirmed', 'FEE_ALREADY_CONFIRMED');
     }
@@ -245,6 +253,21 @@ export class PayoutsService {
     });
 
     logger.info({ feeIntentId: fee.id, actorId }, 'Fee receipt uploaded');
+
+    // Notify super admins (best-effort)
+    try {
+      const branch = await branchesRepository.findById(fee.branch_id);
+      await notificationsService.notifyFeeReceiptUploaded({
+        tenantId: fee.tenant_id,
+        branchId: fee.branch_id,
+        cycle: fee.cycle,
+        feeIntentId: fee.id,
+        branchName: branch?.name ?? 'Branch',
+      });
+    } catch (err) {
+      logger.error({ err, feeIntentId: fee.id }, 'Fee upload notification failed');
+    }
+
     const refreshed = await payoutsRepository.findFeeIntentById(fee.id);
     return feeToDto(refreshed!);
   }
@@ -262,6 +285,7 @@ export class PayoutsService {
   ): Promise<{ fee: PlatformFeeIntentDto; payout: PayoutIntentDto }> {
     const fee = await payoutsRepository.findFeeIntentById(feeIntentId);
     if (!fee) throw new NotFoundError('Fee intent');
+
     if (fee.state === 'CONFIRMED') {
       throw new ConflictError('Fee already confirmed', 'FEE_ALREADY_CONFIRMED');
     }
@@ -275,6 +299,7 @@ export class PayoutsService {
 
     await withTransaction(async (tx) => {
       await payoutsRepository.updateFeeIntentState(fee.id, 'CONFIRMED', adminId, tx);
+
       await payoutsRepository.updatePayoutState(
         payout.id,
         'FEE_PAID',
@@ -315,9 +340,96 @@ export class PayoutsService {
       'Fee confirmed, payout unlocked',
     );
 
+    // Notify branch admins (best-effort)
+    try {
+      await notificationsService.notifyFeeConfirmed({
+        tenantId: fee.tenant_id,
+        branchId: fee.branch_id,
+        cycle: fee.cycle,
+        payoutIntentId: payout.id,
+        reference: payout.reference,
+      });
+    } catch (err) {
+      logger.error({ err, feeIntentId: fee.id }, 'Fee confirmed notification failed');
+    }
+
     const refreshedFee = await payoutsRepository.findFeeIntentById(fee.id);
     const refreshedPayout = await payoutsRepository.findPayoutIntentById(payout.id);
-    return { fee: feeToDto(refreshedFee!), payout: await payoutToDto(refreshedPayout!) };
+
+    return {
+      fee: feeToDto(refreshedFee!),
+      payout: await payoutToDto(refreshedPayout!),
+    };
+  }
+
+  /**
+   * Super admin rejects a platform fee receipt.
+   * Transitions fee_intent from RECEIPT_UPLOADED → PENDING.
+   * The branch admin must re-upload a corrected receipt.
+   * Does NOT touch the ledger — no fee was ever confirmed.
+   */
+  async rejectFee(
+    feeIntentId: string,
+    adminId: string,
+    reason: string,
+    meta: RequestMeta,
+  ): Promise<PlatformFeeIntentDto> {
+    const fee = await payoutsRepository.findFeeIntentById(feeIntentId);
+    if (!fee) throw new NotFoundError('Fee intent');
+
+    if (fee.state === 'CONFIRMED') {
+      throw new ConflictError(
+        'Cannot reject a confirmed fee',
+        'FEE_ALREADY_CONFIRMED',
+      );
+    }
+
+    if (fee.state !== 'RECEIPT_UPLOADED') {
+      throw new ConflictError(
+        'Only receipts awaiting verification can be rejected',
+        'FEE_NOT_PENDING_VERIFICATION',
+      );
+    }
+
+    const updated = await payoutsRepository.updateFeeIntentState(
+      fee.id,
+      'PENDING',
+      null,
+    );
+
+    await record({
+      actorId: adminId,
+      action: 'FEE_REJECTED',
+      entityType: 'platform_fee_intent',
+      entityId: fee.id,
+      ipAddress: meta.ipAddress,
+      userAgent: meta.userAgent,
+      metadata: {
+        tenantId: fee.tenant_id,
+        cycle: fee.cycle,
+        reason,
+      },
+    });
+
+    logger.info(
+      { feeIntentId: fee.id, adminId, reason },
+      'Fee rejected, awaiting re-upload',
+    );
+
+    // Notify branch admins (best-effort)
+    try {
+      await notificationsService.notifyFeeRejected({
+        tenantId: fee.tenant_id,
+        branchId: fee.branch_id,
+        cycle: fee.cycle,
+        feeIntentId: fee.id,
+        reason,
+      });
+    } catch (err) {
+      logger.error({ err, feeIntentId: fee.id }, 'Fee rejected notification failed');
+    }
+
+    return feeToDto(updated);
   }
 
   /**
@@ -339,6 +451,7 @@ export class PayoutsService {
   ): Promise<PayoutIntentDto> {
     const payout = await payoutsRepository.findPayoutIntentById(payoutId);
     if (!payout) throw new NotFoundError('Payout intent');
+
     if (payout.branch_id !== branchId) {
       throw new AppError({
         code: 'AUTH_BRANCH_SCOPE',
@@ -346,9 +459,11 @@ export class PayoutsService {
         message: 'Not permitted for this branch',
       });
     }
+
     if (payout.state === 'CONFIRMED') {
       throw new ConflictError('Payout already confirmed', 'PAYOUT_ALREADY_CONFIRMED');
     }
+
     if (payout.state === 'PENDING') {
       throw new ConflictError(
         'Platform fee not yet confirmed — payout not unlocked',
@@ -399,6 +514,23 @@ export class PayoutsService {
     });
 
     logger.info({ payoutId: payout.id, actorId }, 'Payout receipt uploaded');
+
+    // Notify all tenant members (best-effort)
+    try {
+      const recipient = await usersRepository.findById(payout.recipient_user_id);
+      await notificationsService.notifyPayoutReceiptUploaded({
+        tenantId: payout.tenant_id,
+        branchId: payout.branch_id,
+        cycle: payout.cycle,
+        payoutIntentId: payout.id,
+        recipientName: recipient?.full_name ?? 'A member',
+        recipientSlot: payout.recipient_slot,
+        netAmount: payout.net_amount,
+      });
+    } catch (err) {
+      logger.error({ err, payoutId: payout.id }, 'Payout receipt notification failed');
+    }
+
     const refreshed = await payoutsRepository.findPayoutIntentById(payout.id);
     return payoutToDto(refreshed!);
   }
@@ -416,6 +548,7 @@ export class PayoutsService {
   ): Promise<PayoutIntentDto> {
     const payout = await payoutsRepository.findPayoutIntentById(payoutId);
     if (!payout) throw new NotFoundError('Payout intent');
+
     if (payout.branch_id !== branchId) {
       throw new AppError({
         code: 'AUTH_BRANCH_SCOPE',
@@ -423,9 +556,11 @@ export class PayoutsService {
         message: 'Not permitted for this branch',
       });
     }
+
     if (payout.state === 'CONFIRMED') {
       throw new ConflictError('Payout already confirmed', 'PAYOUT_ALREADY_CONFIRMED');
     }
+
     if (payout.state !== 'RECEIPT_UPLOADED') {
       throw new ConflictError(
         'Payout receipt must be uploaded first',
@@ -475,11 +610,7 @@ export class PayoutsService {
       'Payout confirmed, ledger debited',
     );
 
-    // ─────────────────────────────────────────────────────────────
-    // Event-driven cycle advancement:
-    // After payout is confirmed, the current cycle is complete.
-    // Advance the tenant to the next cycle (idempotent).
-    // ─────────────────────────────────────────────────────────────
+    // Event-driven cycle advancement
     try {
       const adv = await cycleAdvancementService.advanceIfCycleComplete(payout.tenant_id);
       logger.info(

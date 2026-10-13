@@ -33,6 +33,14 @@ export const ConfirmFeeSchema = z.object({
   adminNote: z.string().trim().max(500).optional(),
 });
 
+export const RejectFeeSchema = z.object({
+  reason: z
+    .string()
+    .trim()
+    .min(5, 'Rejection reason must be at least 5 characters')
+    .max(500, 'Reason is too long'),
+});
+
 export const ListPayoutsQuerySchema = z.object({
   limit: z.coerce.number().int().min(1).max(100).default(20),
   offset: z.coerce.number().int().min(0).default(0),
@@ -54,5 +62,6 @@ export const ConfirmPayoutQuerySchema = z.object({
 export type UploadFeeReceiptInput = z.infer<typeof UploadFeeReceiptSchema>;
 export type UploadPayoutReceiptInput = z.infer<typeof UploadPayoutReceiptSchema>;
 export type ConfirmFeeInput = z.infer<typeof ConfirmFeeSchema>;
+export type RejectFeeInput = z.infer<typeof RejectFeeSchema>;
 export type ListPayoutsQueryInput = z.infer<typeof ListPayoutsQuerySchema>;
 export type ListFeesQueryInput = z.infer<typeof ListFeesQuerySchema>;

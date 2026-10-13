@@ -1,0 +1,321 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>ROSCA — Web Push + Socket.IO Test</title>
+  <style>
+    body { font-family: system-ui, -apple-system, sans-serif; max-width: 720px; margin: 40px auto; padding: 20px; background: #f5f5f5; color: #222; }
+    h1 { font-size: 22px; margin-bottom: 8px; }
+    .sub { color: #666; font-size: 14px; margin-bottom: 24px; }
+    .card { background: #fff; border-radius: 8px; padding: 20px; box-shadow: 0 1px 3px rgba(0,0,0,0.08); margin-bottom: 16px; }
+    label { display: block; font-size: 13px; font-weight: 600; margin-bottom: 6px; color: #333; }
+    input, textarea, button { width: 100%; box-sizing: border-box; padding: 10px; font-size: 14px; border-radius: 6px; border: 1px solid #ccc; font-family: inherit; }
+    textarea { font-family: ui-monospace, Menlo, monospace; font-size: 12px; }
+    button { background: #0057b7; color: #fff; border: none; cursor: pointer; font-weight: 600; margin-top: 10px; }
+    button:hover { background: #004494; }
+    button.secondary { background: #666; }
+    button.secondary:hover { background: #444; }
+    button:disabled { background: #aaa; cursor: not-allowed; }
+    .status { margin-top: 12px; padding: 10px; background: #f0f0f0; border-radius: 6px; font-size: 13px; }
+    .status.ok { background: #d4edda; color: #155724; }
+    .status.err { background: #f8d7da; color: #721c24; }
+    .status.warn { background: #fff3cd; color: #856404; }
+    .log { background: #1e1e1e; color: #d4d4d4; font-family: ui-monospace, Menlo, monospace; font-size: 12px; padding: 12px; border-radius: 6px; max-height: 320px; overflow-y: auto; white-space: pre-wrap; }
+    .log .time { color: #888; }
+    .log .ok { color: #4ec9b0; }
+    .log .err { color: #f48771; }
+    .log .event { color: #dcdcaa; }
+    .row { display: flex; gap: 10px; }
+    .row > * { flex: 1; }
+    .badge { display: inline-block; padding: 2px 8px; border-radius: 4px; font-size: 11px; font-weight: 600; margin-left: 8px; }
+    .badge.on { background: #d4edda; color: #155724; }
+    .badge.off { background: #f0f0f0; color: #666; }
+  </style>
+</head>
+<body>
+
+<h1>ROSCA Push Test</h1>
+<p class="sub">Test Web Push + Socket.IO delivery end-to-end. This is a throwaway test page — not part of the real frontend.</p>
+
+<!-- Auth -->
+<div class="card">
+  <label>1. Access token (paste from a login response)</label>
+  <textarea id="token" rows="4" placeholder="eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..."></textarea>
+  <div class="row">
+    <button id="saveToken">Save Token</button>
+    <button id="testApi" class="secondary">Test API Connection</button>
+  </div>
+  <div id="apiStatus" class="status">Not connected.</div>
+</div>
+
+<!-- Push -->
+<div class="card">
+  <label>2. Web Push Subscription <span id="pushBadge" class="badge off">not subscribed</span></label>
+  <p style="font-size: 13px; color: #666; margin: 6px 0 14px;">
+    Click "Enable Push" below. Your browser will ask for permission. Once subscribed, this page
+    registers the endpoint with the backend so pushes are routed to this device.
+  </p>
+  <div class="row">
+    <button id="enablePush">Enable Push</button>
+    <button id="disablePush" class="secondary" disabled>Disable Push</button>
+    <button id="testPush" class="secondary" disabled>Send Test Push (server)</button>
+  </div>
+  <div id="pushStatus" class="status">Push not configured.</div>
+</div>
+
+<!-- Socket -->
+<div class="card">
+  <label>3. Socket.IO Live Feed <span id="socketBadge" class="badge off">disconnected</span></label>
+  <p style="font-size: 13px; color: #666; margin: 6px 0 14px;">
+    Opens a websocket to the server. Real-time notifications appear here instantly
+    if the app is open. Web Push handles the "app is closed" case.
+  </p>
+  <div class="row">
+    <button id="connectSocket">Connect Socket</button>
+    <button id="disconnectSocket" class="secondary" disabled>Disconnect</button>
+  </div>
+  <div id="socketStatus" class="status">Not connected.</div>
+</div>
+
+<!-- Log -->
+<div class="card">
+  <label>Live Log</label>
+  <div id="log" class="log"></div>
+</div>
+
+<!-- Socket.IO client from CDN -->
+<script src="https://cdn.socket.io/4.8.4/socket.io.min.js"></script>
+
+<script>
+const API_BASE = 'http://localhost:4001';
+
+// ---------- Logging ----------
+const logEl = document.getElementById('log');
+function log(msg, cls = '') {
+  const t = new Date().toLocaleTimeString();
+  const line = document.createElement('div');
+  line.innerHTML = `<span class="time">[${t}]</span> <span class="${cls}">${escapeHtml(msg)}</span>`;
+  logEl.appendChild(line);
+  logEl.scrollTop = logEl.scrollHeight;
+}
+function escapeHtml(s) {
+  return s.replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+}
+function setStatus(id, msg, cls = '') {
+  const el = document.getElementById(id);
+  el.textContent = msg;
+  el.className = 'status ' + cls;
+}
+
+// ---------- State ----------
+let accessToken = localStorage.getItem('rosca_token') || '';
+let socket = null;
+let pushSubscription = null;
+
+document.getElementById('token').value = accessToken;
+
+// ---------- Token ----------
+document.getElementById('saveToken').addEventListener('click', () => {
+  accessToken = document.getElementById('token').value.trim();
+  localStorage.setItem('rosca_token', accessToken);
+  log('Token saved (' + (accessToken ? accessToken.slice(0, 20) + '...' : '(empty)') + ')', 'ok');
+  setStatus('apiStatus', 'Token saved. Click "Test API Connection".');
+});
+
+document.getElementById('testApi').addEventListener('click', async () => {
+  if (!accessToken) { setStatus('apiStatus', 'No token set.', 'err'); return; }
+  try {
+    const r = await fetch(API_BASE + '/api/notifications/unread-count', {
+      headers: { Authorization: 'Bearer ' + accessToken },
+    });
+    const j = await r.json();
+    if (j.ok) {
+      setStatus('apiStatus', `Connected. Unread count: ${j.data.count}`, 'ok');
+      log('API OK — unread count: ' + j.data.count, 'ok');
+    } else {
+      setStatus('apiStatus', 'API error: ' + (j.error?.code || 'unknown'), 'err');
+      log('API error: ' + JSON.stringify(j), 'err');
+    }
+  } catch (e) {
+    setStatus('apiStatus', 'Cannot reach ' + API_BASE + ' — is the server running?', 'err');
+    log('Connection error: ' + e.message, 'err');
+  }
+});
+
+// ---------- Push ----------
+function urlBase64ToUint8Array(base64String) {
+  const padding = '='.repeat((4 - (base64String.length % 4)) % 4);
+  const base64 = (base64String + padding).replace(/-/g, '+').replace(/_/g, '/');
+  const rawData = atob(base64);
+  const outputArray = new Uint8Array(rawData.length);
+  for (let i = 0; i < rawData.length; ++i) outputArray[i] = rawData.charCodeAt(i);
+  return outputArray;
+}
+
+document.getElementById('enablePush').addEventListener('click', async () => {
+  if (!accessToken) { setStatus('pushStatus', 'Set your token first.', 'err'); return; }
+  if (!('serviceWorker' in navigator) || !('PushManager' in window)) {
+    setStatus('pushStatus', 'This browser does not support Web Push.', 'err');
+    return;
+  }
+  try {
+    setStatus('pushStatus', 'Requesting permission...');
+    const permission = await Notification.requestPermission();
+    if (permission !== 'granted') {
+      setStatus('pushStatus', 'Permission denied.', 'err');
+      return;
+    }
+    log('Browser push permission granted', 'ok');
+
+    // Register service worker (inline blob — no separate file needed)
+    const swCode = `
+      self.addEventListener('push', function(event) {
+        let data = { title: 'ROSCA', body: 'New notification' };
+        try { data = event.data.json(); } catch (e) {}
+        event.waitUntil(self.registration.showNotification(data.title || 'ROSCA', {
+          body: data.body || '',
+          icon: 'data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><circle cx="50" cy="50" r="45" fill="%230057b7"/></svg>',
+          data: { url: data.url || '/' },
+        }));
+      });
+      self.addEventListener('notificationclick', function(event) {
+        event.notification.close();
+        event.waitUntil(clients.openWindow(event.notification.data.url || '/'));
+      });
+    `;
+    const swBlob = new Blob([swCode], { type: 'application/javascript' });
+    const swUrl = URL.createObjectURL(swBlob);
+    const reg = await navigator.serviceWorker.register(swUrl);
+    log('Service worker registered', 'ok');
+
+    // Fetch VAPID public key
+    const vapidRes = await fetch(API_BASE + '/api/notifications/vapid-public-key', {
+      headers: { Authorization: 'Bearer ' + accessToken },
+    });
+    const vapidJson = await vapidRes.json();
+    if (!vapidJson.ok) {
+      setStatus('pushStatus', 'Server VAPID key unavailable.', 'err');
+      return;
+    }
+    const applicationServerKey = urlBase64ToUint8Array(vapidJson.data.publicKey);
+
+    // Subscribe
+    const sub = await reg.pushManager.subscribe({
+      userVisibleOnly: true,
+      applicationServerKey,
+    });
+    pushSubscription = sub;
+    log('Push subscription created: ' + sub.endpoint.slice(0, 60) + '...', 'ok');
+
+    // Send subscription to backend
+    const subscribeRes = await fetch(API_BASE + '/api/notifications/push/subscribe', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: 'Bearer ' + accessToken,
+      },
+      body: JSON.stringify(sub.toJSON()),
+    });
+    const subscribeJson = await subscribeRes.json();
+    if (!subscribeJson.ok) {
+      setStatus('pushStatus', 'Backend rejected subscription.', 'err');
+      return;
+    }
+
+    setStatus('pushStatus', 'Push enabled. Waiting for events...', 'ok');
+    document.getElementById('pushBadge').textContent = 'subscribed';
+    document.getElementById('pushBadge').className = 'badge on';
+    document.getElementById('enablePush').disabled = true;
+    document.getElementById('disablePush').disabled = false;
+    document.getElementById('testPush').disabled = false;
+    log('Push subscription saved to backend', 'ok');
+  } catch (e) {
+    setStatus('pushStatus', 'Error: ' + e.message, 'err');
+    log('Push error: ' + e.message, 'err');
+  }
+});
+
+document.getElementById('disablePush').addEventListener('click', async () => {
+  if (!pushSubscription) return;
+  try {
+    await fetch(API_BASE + '/api/notifications/push/unsubscribe', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: 'Bearer ' + accessToken,
+      },
+      body: JSON.stringify({ endpoint: pushSubscription.endpoint }),
+    });
+    await pushSubscription.unsubscribe();
+    pushSubscription = null;
+    setStatus('pushStatus', 'Push disabled.');
+    document.getElementById('pushBadge').textContent = 'not subscribed';
+    document.getElementById('pushBadge').className = 'badge off';
+    document.getElementById('enablePush').disabled = false;
+    document.getElementById('disablePush').disabled = true;
+    document.getElementById('testPush').disabled = true;
+    log('Push unsubscribed', 'warn');
+  } catch (e) {
+    log('Unsubscribe error: ' + e.message, 'err');
+  }
+});
+
+document.getElementById('testPush').addEventListener('click', async () => {
+  // No dedicated test endpoint — this is a placeholder. Trigger a real event
+  // (upload a receipt, confirm a contribution, etc.) from another tab.
+  log('To test push: trigger an event from another tab (e.g., confirm a contribution).', 'warn');
+});
+
+// ---------- Socket.IO ----------
+document.getElementById('connectSocket').addEventListener('click', () => {
+  if (!accessToken) { setStatus('socketStatus', 'Set your token first.', 'err'); return; }
+  if (socket) socket.disconnect();
+
+  socket = io(API_BASE, {
+    auth: { token: accessToken },
+    transports: ['websocket', 'polling'],
+  });
+
+  socket.on('connect', () => {
+    setStatus('socketStatus', 'Connected. Socket ID: ' + socket.id, 'ok');
+    document.getElementById('socketBadge').textContent = 'connected';
+    document.getElementById('socketBadge').className = 'badge on';
+    document.getElementById('connectSocket').disabled = true;
+    document.getElementById('disconnectSocket').disabled = false;
+    log('Socket.IO connected: ' + socket.id, 'ok');
+  });
+
+  socket.on('disconnect', (reason) => {
+    setStatus('socketStatus', 'Disconnected: ' + reason);
+    document.getElementById('socketBadge').textContent = 'disconnected';
+    document.getElementById('socketBadge').className = 'badge off';
+    document.getElementById('connectSocket').disabled = false;
+    document.getElementById('disconnectSocket').disabled = true;
+    log('Socket.IO disconnected: ' + reason, 'warn');
+  });
+
+  socket.on('connect_error', (err) => {
+    setStatus('socketStatus', 'Connection error: ' + err.message, 'err');
+    log('Socket.IO error: ' + err.message, 'err');
+  });
+
+  socket.on('notification:new', (data) => {
+    log('notification:new — ' + data.kind + ' — ' + data.title, 'event');
+    // Show inline preview
+    const preview = document.createElement('div');
+    preview.style.cssText = 'margin-top:8px;padding:10px;background:#e7f3ff;border-radius:6px;font-size:13px;';
+    preview.innerHTML = `<strong>${escapeHtml(data.title)}</strong><br>${escapeHtml(data.body)}`;
+    document.getElementById('socketStatus').appendChild(preview);
+    setTimeout(() => preview.remove(), 10000);
+  });
+});
+
+document.getElementById('disconnectSocket').addEventListener('click', () => {
+  if (socket) socket.disconnect();
+});
+
+log('Page loaded. Set your access token to begin.', 'ok');
+</script>
+
+</body>
+</html>
