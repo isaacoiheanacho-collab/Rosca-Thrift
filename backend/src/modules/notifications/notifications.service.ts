@@ -4,11 +4,11 @@
  * The single entry point for creating + delivering notifications.
  *
  * Public API:
- *   - notify(...)             — one user, one event
- *   - notifyMany(...)         — N users, same event
- *   - notifyTenant(...)       — all active members of a tenant
- *   - notifySuperAdmins(...)  — all super admins
- *   - notifyBranchAdmins(...) — all branch admins for a branch
+ *   - notify(...)             - one user, one event
+ *   - notifyMany(...)         - N users, same event
+ *   - notifyTenant(...)       - all active members of a tenant
+ *   - notifySuperAdmins(...)  - all super admins
+ *   - notifyBranchAdmins(...) - all branch admins for a branch
  *
  * Event helpers (each wraps notify/notifyMany with proper title + body):
  *   - notifyKycApproved
@@ -20,6 +20,8 @@
  *   - notifyFeeConfirmed
  *   - notifyFeeRejected
  *   - notifyPayoutReceiptUploaded
+ *   - notifyPayoutFailed
+ *   - notifyPayoutRetried
  *   - notifyCycleAdvanced
  *   - notifyRenewalOpened
  *   - notifyRenewalDeclined
@@ -30,7 +32,7 @@
  *
  * Every helper:
  *   1. Inserts one row per recipient into `notifications`
- *   2. Fires delivery asynchronously (Socket.IO + Web Push) — best-effort
+ *   2. Fires delivery asynchronously (Socket.IO + Web Push) - best-effort
  *
  * Never throws. Failures are logged.
  */
@@ -55,9 +57,9 @@ export interface NotifyInput {
 }
 
 export class NotificationsService {
-  // ─────────────────────────────────────────────────────────────
+  // ---------------------------------------------------------------
   // Core API
-  // ─────────────────────────────────────────────────────────────
+  // ---------------------------------------------------------------
 
   async notify(input: NotifyInput): Promise<NotificationRow | null> {
     try {
@@ -71,7 +73,6 @@ export class NotificationsService {
         metadata: input.metadata ?? {},
       });
 
-      // Fire-and-forget delivery
       void realtimeService
         .deliver({
           id: row.id,
@@ -106,7 +107,6 @@ export class NotificationsService {
         })),
       );
 
-      // Deliver in parallel — best-effort
       for (const row of rows) {
         void realtimeService
           .deliver({
@@ -128,10 +128,6 @@ export class NotificationsService {
     }
   }
 
-  /**
-   * Notify all active members of a tenant.
-   * Automatically deduplicates recipients.
-   */
   async notifyTenant(params: {
     tenantId: string;
     branchId: string;
@@ -203,9 +199,9 @@ export class NotificationsService {
     );
   }
 
-  // ─────────────────────────────────────────────────────────────
+  // ---------------------------------------------------------------
   // Event helpers
-  // ─────────────────────────────────────────────────────────────
+  // ---------------------------------------------------------------
 
   async notifyKycApproved(params: { userId: string; branchId: string }): Promise<void> {
     await this.notify({
@@ -365,6 +361,38 @@ export class NotificationsService {
     });
   }
 
+  async notifyPayoutFailed(params: {
+    tenantId: string;
+    branchId: string;
+    cycle: number;
+    payoutIntentId: string;
+  }): Promise<void> {
+    await this.notifyTenant({
+      tenantId: params.tenantId,
+      branchId: params.branchId,
+      kind: 'PAYOUT_FAILED',
+      title: 'Payout could not be completed',
+      body: `Cycle ${params.cycle} payout could not be completed. A retry is in progress.`,
+      metadata: { payoutIntentId: params.payoutIntentId, cycle: params.cycle },
+    });
+  }
+
+  async notifyPayoutRetried(params: {
+    tenantId: string;
+    branchId: string;
+    cycle: number;
+    payoutIntentId: string;
+  }): Promise<void> {
+    await this.notifyTenant({
+      tenantId: params.tenantId,
+      branchId: params.branchId,
+      kind: 'PAYOUT_RETRIED',
+      title: 'Payout has been reissued',
+      body: `Cycle ${params.cycle} payout has been reissued. You will be notified when it completes.`,
+      metadata: { payoutIntentId: params.payoutIntentId, cycle: params.cycle },
+    });
+  }
+
   async notifyCycleAdvanced(params: {
     tenantId: string;
     branchId: string;
@@ -405,7 +433,7 @@ export class NotificationsService {
       branchId: params.branchId,
       tenantId: params.tenantId,
       kind: 'RENEWAL_DECLINED',
-      title: 'Renewal declined — replacement needed',
+      title: 'Renewal declined - replacement needed',
       body: `${params.memberName} (slot ${params.slotNumber}) declined renewal. Please find a replacement.`,
       metadata: { slotNumber: params.slotNumber },
     });
@@ -471,9 +499,9 @@ export class NotificationsService {
     });
   }
 
-  // ─────────────────────────────────────────────────────────────
+  // ---------------------------------------------------------------
   // Feed + read APIs
-  // ─────────────────────────────────────────────────────────────
+  // ---------------------------------------------------------------
 
   async listMyNotifications(
     userId: string,

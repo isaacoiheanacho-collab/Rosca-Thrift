@@ -7,12 +7,18 @@
  *   POST /api/branch-admin/payouts/fees/:id/receipt   - upload fee receipt
  *   POST /api/branch-admin/payouts/:id/receipt        - upload payout receipt
  *   POST /api/branch-admin/payouts/:id/confirm        - mark payout done
+ *   POST /api/branch-admin/payouts/:id/fail           - mark payout failed
+ *   POST /api/branch-admin/payouts/:id/retry          - issue a retry
+ *   GET  /api/branch-admin/payouts/failed             - list failed for this branch
  *
  * Super admin:
  *   GET  /api/super-admin/payouts/fees/pending        - queue of fee receipts
  *   POST /api/super-admin/payouts/fees/:id/confirm    - confirm fee received
  *   POST /api/super-admin/payouts/fees/:id/reject     - reject fee receipt
  *   GET  /api/super-admin/payouts/:id                 - view any payout
+ *   POST /api/super-admin/payouts/:id/fail            - fail any payout
+ *   POST /api/super-admin/payouts/:id/retry           - retry any failed payout
+ *   GET  /api/super-admin/payouts/failed              - queue of failed payouts
  *
  * Saver (tenant-scoped):
  *   GET /api/tenants/me/payout/current                 - current cycle's payout
@@ -29,7 +35,9 @@ import { tenantsRepository } from '../tenants/tenants.repository';
 import {
   ConfirmFeeSchema,
   ConfirmPayoutQuerySchema,
+  FailPayoutSchema,
   FeeIntentIdParamSchema,
+  ListFailedQuerySchema,
   ListFeesQuerySchema,
   ListPayoutsQuerySchema,
   PayoutIdParamSchema,
@@ -61,6 +69,10 @@ const upload = multer({
   },
 });
 
+/**
+ * Resolve branch scope for a route that strictly requires it (list, upload,
+ * confirm fee). Super admin must supply branchId via query/body/params.
+ */
 function resolveBranchScope(req: Request): string {
   const user = req.user!;
 
@@ -93,6 +105,28 @@ function resolveBranchScope(req: Request): string {
   throw new AppError({ code: 'AUTH_FORBIDDEN', httpStatus: 403, message: 'Not permitted' });
 }
 
+/**
+ * Resolve optional branch scope for actions on a specific resource ID.
+ * Returns:
+ *   - branch admin → their own branchId (service validates resource matches)
+ *   - super admin  → null (service skips branch validation)
+ */
+function resolveBranchScopeOptional(req: Request): string | null {
+  const user = req.user!;
+  if (user.role === 'BRANCH_ADMIN') {
+    if (!user.branchId) {
+      throw new AppError({
+        code: 'AUTH_BRANCH_REQUIRED',
+        httpStatus: 403,
+        message: 'No branch assigned to this account',
+      });
+    }
+    return user.branchId;
+  }
+  // SUPER_ADMIN → no restriction
+  return null;
+}
+
 // ---- Branch admin router ----
 
 export const branchAdminPayoutsRouter = Router();
@@ -107,7 +141,7 @@ branchAdminPayoutsRouter.get(
       const q = req.query as unknown as {
         limit: number;
         offset: number;
-        state?: 'PENDING' | 'FEE_PAID' | 'RECEIPT_UPLOADED' | 'CONFIRMED';
+        state?: 'PENDING' | 'FEE_PAID' | 'RECEIPT_UPLOADED' | 'CONFIRMED' | 'FAILED';
         branchId?: string;
       };
       const branchId = resolveBranchScope(req);
@@ -115,6 +149,25 @@ branchAdminPayoutsRouter.get(
         limit: q.limit,
         offset: q.offset,
         state: q.state,
+      });
+      res.json({ ok: true, data: { ...result, limit: q.limit, offset: q.offset } });
+    } catch (err) {
+      next(err);
+    }
+  },
+);
+
+branchAdminPayoutsRouter.get(
+  '/failed',
+  validate({ query: ListFailedQuerySchema }),
+  async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const q = req.query as unknown as { limit: number; offset: number };
+      const branchId = resolveBranchScope(req);
+      const result = await payoutsService.listPayoutsByBranch(branchId, {
+        limit: q.limit,
+        offset: q.offset,
+        state: 'FAILED',
       });
       res.json({ ok: true, data: { ...result, limit: q.limit, offset: q.offset } });
     } catch (err) {
@@ -230,6 +283,48 @@ branchAdminPayoutsRouter.post(
   },
 );
 
+branchAdminPayoutsRouter.post(
+  '/:id/fail',
+  validate({ params: PayoutIdParamSchema, body: FailPayoutSchema }),
+  async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      // Optional branch scope — super admin passes null, service handles it.
+      const branchScope = resolveBranchScopeOptional(req);
+      const dto = await payoutsService.markPayoutFailed(
+        String(req.params.id),
+        branchScope,
+        req.body.reason,
+        req.body.notes ?? null,
+        req.user!.sub,
+        metaOf(req),
+      );
+      res.json({ ok: true, data: dto });
+    } catch (err) {
+      next(err);
+    }
+  },
+);
+
+branchAdminPayoutsRouter.post(
+  '/:id/retry',
+  validate({ params: PayoutIdParamSchema }),
+  async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      // Optional branch scope — super admin passes null, service handles it.
+      const branchScope = resolveBranchScopeOptional(req);
+      const dto = await payoutsService.retryPayout(
+        String(req.params.id),
+        branchScope,
+        req.user!.sub,
+        metaOf(req),
+      );
+      res.status(201).json({ ok: true, data: dto });
+    } catch (err) {
+      next(err);
+    }
+  },
+);
+
 // ---- Super admin router ----
 
 export const superAdminPayoutsRouter = Router();
@@ -243,6 +338,28 @@ superAdminPayoutsRouter.get(
     try {
       const q = req.query as unknown as { limit: number; offset: number };
       const result = await payoutsService.listPendingFeeIntents(q);
+      res.json({ ok: true, data: { ...result, limit: q.limit, offset: q.offset } });
+    } catch (err) {
+      next(err);
+    }
+  },
+);
+
+superAdminPayoutsRouter.get(
+  '/failed',
+  validate({ query: ListFailedQuerySchema }),
+  async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const q = req.query as unknown as {
+        limit: number;
+        offset: number;
+        onlyUnretried: boolean;
+      };
+      const result = await payoutsService.listFailedPayouts({
+        limit: q.limit,
+        offset: q.offset,
+        onlyUnretried: q.onlyUnretried,
+      });
       res.json({ ok: true, data: { ...result, limit: q.limit, offset: q.offset } });
     } catch (err) {
       next(err);
@@ -293,6 +410,44 @@ superAdminPayoutsRouter.post(
         metaOf(req),
       );
       res.json({ ok: true, data: dto });
+    } catch (err) {
+      next(err);
+    }
+  },
+);
+
+superAdminPayoutsRouter.post(
+  '/:id/fail',
+  validate({ params: PayoutIdParamSchema, body: FailPayoutSchema }),
+  async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const dto = await payoutsService.markPayoutFailed(
+        String(req.params.id),
+        null, // super admin — no branch restriction
+        req.body.reason,
+        req.body.notes ?? null,
+        req.user!.sub,
+        metaOf(req),
+      );
+      res.json({ ok: true, data: dto });
+    } catch (err) {
+      next(err);
+    }
+  },
+);
+
+superAdminPayoutsRouter.post(
+  '/:id/retry',
+  validate({ params: PayoutIdParamSchema }),
+  async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const dto = await payoutsService.retryPayout(
+        String(req.params.id),
+        null,
+        req.user!.sub,
+        metaOf(req),
+      );
+      res.status(201).json({ ok: true, data: dto });
     } catch (err) {
       next(err);
     }

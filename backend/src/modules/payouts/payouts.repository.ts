@@ -6,7 +6,12 @@ import type { PoolClient } from 'pg';
 import { pool } from '../../db';
 
 export type FeeIntentState = 'PENDING' | 'RECEIPT_UPLOADED' | 'CONFIRMED';
-export type PayoutIntentState = 'PENDING' | 'FEE_PAID' | 'RECEIPT_UPLOADED' | 'CONFIRMED';
+export type PayoutIntentState =
+  | 'PENDING'
+  | 'FEE_PAID'
+  | 'RECEIPT_UPLOADED'
+  | 'CONFIRMED'
+  | 'FAILED';
 
 export interface PlatformFeeIntentRow {
   id: string;
@@ -49,6 +54,12 @@ export interface PayoutIntentRow {
   payout_confirmed_by: string | null;
   payout_confirmed_at: Date | null;
   fee_intent_id: string | null;
+  // Failure + retry columns (migration 017)
+  failed_at: Date | null;
+  failure_reason: string | null;
+  failed_by: string | null;
+  retry_of_payout_id: string | null;
+  retry_count: number;
   created_at: Date;
   updated_at: Date;
 }
@@ -162,7 +173,6 @@ export class PayoutsRepository {
     return { intents: listResult.rows, total };
   }
 
-  /** All pending fee intents across all branches (super admin queue). */
   async listPendingFeeIntents(options: { limit: number; offset: number }): Promise<{
     intents: PlatformFeeIntentRow[];
     total: number;
@@ -224,6 +234,8 @@ export class PayoutsRepository {
       tvcBps: number;
       feeBps: number;
       feeIntentId: string;
+      retryOfPayoutId?: string | null;
+      retryCount?: number;
     },
     tx?: PoolClient,
   ): Promise<PayoutIntentRow> {
@@ -233,8 +245,9 @@ export class PayoutsRepository {
          (tenant_id, branch_id, tenure, cycle,
           recipient_user_id, recipient_membership_id, recipient_slot,
           reference, gross_amount, tvc_adjustment, pot_after_tvc,
-          platform_fee, net_amount, tvc_bps, fee_bps, fee_intent_id)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
+          platform_fee, net_amount, tvc_bps, fee_bps, fee_intent_id,
+          retry_of_payout_id, retry_count)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18)
        RETURNING *`,
       [
         data.tenantId,
@@ -253,6 +266,8 @@ export class PayoutsRepository {
         data.tvcBps,
         data.feeBps,
         data.feeIntentId,
+        data.retryOfPayoutId ?? null,
+        data.retryCount ?? 0,
       ],
     );
     return result.rows[0]!;
@@ -264,6 +279,8 @@ export class PayoutsRepository {
     opts: {
       feeConfirmedBy?: string | null;
       payoutConfirmedBy?: string | null;
+      failedBy?: string | null;
+      failureReason?: string | null;
     } = {},
     tx?: PoolClient,
   ): Promise<PayoutIntentRow> {
@@ -274,12 +291,33 @@ export class PayoutsRepository {
            fee_confirmed_by = COALESCE($3, fee_confirmed_by),
            fee_confirmed_at = CASE WHEN $3 IS NOT NULL THEN NOW() ELSE fee_confirmed_at END,
            payout_confirmed_by = COALESCE($4, payout_confirmed_by),
-           payout_confirmed_at = CASE WHEN $4 IS NOT NULL THEN NOW() ELSE payout_confirmed_at END
+           payout_confirmed_at = CASE WHEN $4 IS NOT NULL THEN NOW() ELSE payout_confirmed_at END,
+           failed_by = COALESCE($5, failed_by),
+           failed_at = CASE WHEN $5 IS NOT NULL THEN NOW() ELSE failed_at END,
+           failure_reason = COALESCE($6, failure_reason)
        WHERE id = $1
        RETURNING *`,
-      [id, state, opts.feeConfirmedBy ?? null, opts.payoutConfirmedBy ?? null],
+      [
+        id,
+        state,
+        opts.feeConfirmedBy ?? null,
+        opts.payoutConfirmedBy ?? null,
+        opts.failedBy ?? null,
+        opts.failureReason ?? null,
+      ],
     );
     return result.rows[0]!;
+  }
+
+  /**
+   * Increment retry_count on the FAILED original payout that a retry links to.
+   */
+  async bumpRetryCount(payoutId: string, tx?: PoolClient): Promise<void> {
+    const runner = tx ?? pool;
+    await runner.query(
+      `UPDATE payout_intents SET retry_count = retry_count + 1 WHERE id = $1`,
+      [payoutId],
+    );
   }
 
   async listPayoutsByTenant(tenantId: string, limit = 100): Promise<PayoutIntentRow[]> {
@@ -305,7 +343,11 @@ export class PayoutsRepository {
 
   async listPayoutsByBranch(
     branchId: string,
-    options: { limit: number; offset: number; state?: PayoutIntentState },
+    options: {
+      limit: number;
+      offset: number;
+      state?: PayoutIntentState;
+    },
   ): Promise<{ intents: PayoutIntentRow[]; total: number }> {
     const conditions: string[] = ['branch_id = $1'];
     const params: unknown[] = [branchId];
@@ -333,6 +375,43 @@ export class PayoutsRepository {
        ORDER BY created_at DESC
        LIMIT $${limitIdx} OFFSET $${offsetIdx}`,
       params,
+    );
+
+    return { intents: listResult.rows, total };
+  }
+
+  /**
+   * Super admin: failed payouts across all branches (unretried only by default).
+   */
+  async listFailedPayouts(options: {
+    limit: number;
+    offset: number;
+    onlyUnretried?: boolean;
+  }): Promise<{ intents: PayoutIntentRow[]; total: number }> {
+    const conditions: string[] = [`state = 'FAILED'`];
+
+    if (options.onlyUnretried) {
+      // Unretried = no other payout_intent has retry_of_payout_id pointing to this one
+      conditions.push(
+        `NOT EXISTS (
+           SELECT 1 FROM payout_intents r
+           WHERE r.retry_of_payout_id = payout_intents.id
+         )`,
+      );
+    }
+
+    const where = `WHERE ${conditions.join(' AND ')}`;
+
+    const countResult = await pool.query<{ count: string }>(
+      `SELECT COUNT(*)::text AS count FROM payout_intents ${where}`,
+    );
+    const total = Number(countResult.rows[0]?.count ?? '0');
+
+    const listResult = await pool.query<PayoutIntentRow>(
+      `SELECT * FROM payout_intents ${where}
+       ORDER BY failed_at DESC NULLS LAST
+       LIMIT $1 OFFSET $2`,
+      [options.limit, options.offset],
     );
 
     return { intents: listResult.rows, total };
