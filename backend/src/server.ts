@@ -40,6 +40,8 @@ import {
   superAdminPayoutsRouter,
   tenantPayoutVisibilityRouter,
   notificationsRouter,
+  superAdminStatsRouter,
+  branchAdminStatsRouter,
 } from './modules';
 import authSessionsRouter from './modules/auth/auth.sessions';
 
@@ -133,6 +135,10 @@ app.use('/api/branch-admin/pool-account', branchAdminPoolAccountRouter);
 app.use('/api/super-admin/maintenance-account', superAdminMaintenanceAccountRouter);
 app.use('/api/super-admin/branch-pool-account', superAdminBranchPoolAccountRouter);
 
+// ---- Stats ----
+app.use('/api/super-admin/stats', superAdminStatsRouter);
+app.use('/api/branch-admin/stats', branchAdminStatsRouter);
+
 // ---- Super admin branches (must come after specific /api/super-admin paths) ----
 app.use('/api/super-admin/branches', superAdminBranchesRouter);
 
@@ -146,12 +152,14 @@ initSocketIO(httpServer);
 
 async function shutdown(signal: string): Promise<void> {
   logger.info(`Received ${signal}, shutting down...`);
+
   await Promise.allSettled([
     stopAllWorkers(),
     closeSocketIO(),
     pool.end(),
     closeRedis(),
   ]);
+
   httpServer.close();
   process.exit(0);
 }

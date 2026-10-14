@@ -50,3 +50,8 @@ export {
 } from './payouts/payouts.routes';
 
 export { default as notificationsRouter } from './notifications/notifications.routes';
+
+export {
+  superAdminStatsRouter,
+  branchAdminStatsRouter,
+} from './stats/stats.routes';
