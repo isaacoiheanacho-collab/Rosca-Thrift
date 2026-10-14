@@ -10,13 +10,21 @@ const SlugSchema = z
   .toLowerCase()
   .min(3, 'Slug must be at least 3 characters')
   .max(50, 'Slug is too long')
-  .regex(/^[a-z0-9][a-z0-9-]*[a-z0-9]$/, 'Slug must be lowercase alphanumeric with dashes (no leading/trailing dash)');
+  .regex(
+    /^[a-z0-9][a-z0-9-]*[a-z0-9]$/,
+    'Slug must be lowercase alphanumeric with dashes (no leading/trailing dash)',
+  );
 
 const BranchNameSchema = z
   .string()
   .trim()
   .min(2, 'Branch name must be at least 2 characters')
   .max(120, 'Branch name is too long');
+
+const HexColorSchema = z
+  .string()
+  .trim()
+  .regex(/^#[0-9a-fA-F]{6}$/, 'Color must be a hex code like #00daf3');
 
 export const CreateBranchSchema = z.object({
   slug: SlugSchema,
@@ -59,6 +67,24 @@ export const UpdateTrustAccountSchema = z.object({
   trustAccountHolder: z.string().trim().min(2, 'Account holder name is required'),
 });
 
+/**
+ * UpdateBrandingSchema — all fields optional. Merge-in semantics: only the
+ * provided fields change; the rest are preserved. To clear a field, set it
+ * to an empty string (or we can add explicit null handling later if needed).
+ */
+export const UpdateBrandingSchema = z
+  .object({
+    logoUrl: z.string().trim().url('Logo must be a valid URL').optional(),
+    primaryColor: HexColorSchema.optional(),
+    accentColor: HexColorSchema.optional(),
+    displayName: z.string().trim().min(2).max(120).optional(),
+    contactEmail: z.string().trim().toLowerCase().email().optional(),
+  })
+  .refine((d) => Object.keys(d).length > 0, {
+    message: 'At least one branding field must be provided',
+  });
+
 export type CreateBranchInput = z.infer<typeof CreateBranchSchema>;
 export type UpdateBranchInput = z.infer<typeof UpdateBranchSchema>;
 export type UpdateTrustAccountInput = z.infer<typeof UpdateTrustAccountSchema>;
+export type UpdateBrandingInput = z.infer<typeof UpdateBrandingSchema>;

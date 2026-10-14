@@ -7,6 +7,14 @@ import { pool } from '../../db';
 
 export type BranchStatus = 'ACTIVE' | 'SUSPENDED' | 'ARCHIVED';
 
+export interface BranchBranding {
+  logoUrl?: string;
+  primaryColor?: string;
+  accentColor?: string;
+  displayName?: string;
+  contactEmail?: string;
+}
+
 export interface BranchRow {
   id: string;
   slug: string;
@@ -18,6 +26,7 @@ export interface BranchRow {
   trust_account_holder: string | null;
   contact_email: string | null;
   contact_phone: string | null;
+  branding: BranchBranding;
   created_by: string | null;
   created_at: Date;
   updated_at: Date;
@@ -25,17 +34,25 @@ export interface BranchRow {
 
 export class BranchesRepository {
   async count(): Promise<number> {
-    const result = await pool.query<{ count: string }>('SELECT COUNT(*)::text AS count FROM branches');
+    const result = await pool.query<{ count: string }>(
+      'SELECT COUNT(*)::text AS count FROM branches',
+    );
     return Number(result.rows[0]?.count ?? '0');
   }
 
   async findBySlug(slug: string): Promise<BranchRow | null> {
-    const result = await pool.query<BranchRow>('SELECT * FROM branches WHERE slug = $1', [slug]);
+    const result = await pool.query<BranchRow>(
+      'SELECT * FROM branches WHERE slug = $1',
+      [slug],
+    );
     return result.rows[0] ?? null;
   }
 
   async findById(id: string): Promise<BranchRow | null> {
-    const result = await pool.query<BranchRow>('SELECT * FROM branches WHERE id = $1', [id]);
+    const result = await pool.query<BranchRow>(
+      'SELECT * FROM branches WHERE id = $1',
+      [id],
+    );
     return result.rows[0] ?? null;
   }
 
@@ -119,6 +136,25 @@ export class BranchesRepository {
     const result = await pool.query<BranchRow>(
       `UPDATE branches SET ${fields.join(', ')} WHERE id = $${idx} RETURNING *`,
       values,
+    );
+    return result.rows[0]!;
+  }
+
+  /**
+   * Merge-in branding fields. Pass only the keys you want to change —
+   * existing keys are preserved. Pass null to remove a key.
+   */
+  async updateBranding(
+    id: string,
+    patch: Partial<BranchBranding>,
+  ): Promise<BranchRow> {
+    // Build the merged JSON in SQL so we don't have to read-modify-write.
+    const result = await pool.query<BranchRow>(
+      `UPDATE branches
+       SET branding = COALESCE(branding, '{}'::jsonb) || $2::jsonb
+       WHERE id = $1
+       RETURNING *`,
+      [id, JSON.stringify(patch)],
     );
     return result.rows[0]!;
   }

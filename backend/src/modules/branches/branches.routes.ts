@@ -2,16 +2,18 @@
  * Branch routes.
  *
  * Public:
- *   GET  /api/branches/:slug              - lookup branch by slug (used by join page)
+ *   GET  /api/branches/:slug/public       - lookup public branch info (branding, name)
+ *   GET  /api/branches/:slug              - lookup full branch by slug (legacy)
  *
  * Super Admin:
- *   POST   /api/super-admin/branches             - create
- *   GET    /api/super-admin/branches             - list
- *   GET    /api/super-admin/branches/:id         - view one
- *   PATCH  /api/super-admin/branches/:id         - update details/status
+ *   POST   /api/super-admin/branches                    - create
+ *   GET    /api/super-admin/branches                    - list
+ *   GET    /api/super-admin/branches/:id                - view one
+ *   PATCH  /api/super-admin/branches/:id                - update details/status
+ *   PATCH  /api/super-admin/branches/:id/branding       - update branding (white-label)
  *
  * Branch Admin (or Super Admin):
- *   PATCH  /api/branches/:id/trust-account       - set trust account details
+ *   PATCH  /api/branches/:id/trust-account              - set trust account details
  */
 
 import { Router, type Request, type Response, type NextFunction } from 'express';
@@ -22,6 +24,7 @@ import { branchesService, type RequestMeta } from './branches.service';
 import {
   CreateBranchSchema,
   UpdateBranchSchema,
+  UpdateBrandingSchema,
   UpdateTrustAccountSchema,
 } from './branches.schemas';
 
@@ -33,6 +36,25 @@ function metaOf(req: Request): RequestMeta {
 
 export const publicBranchesRouter = Router();
 
+/**
+ * Public branch info by slug. No auth. Returns name + branding for the
+ * login/join page to render the correct theme before the user logs in.
+ */
+publicBranchesRouter.get(
+  '/:slug/public',
+  async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const branch = await branchesService.getPublicBySlug(String(req.params.slug));
+      res.json({ ok: true, data: branch });
+    } catch (err) {
+      next(err);
+    }
+  },
+);
+
+/**
+ * Legacy: full public lookup (kept for compatibility).
+ */
 publicBranchesRouter.get('/:slug', async (req: Request, res: Response, next: NextFunction) => {
   try {
     const branch = await branchesService.getBySlug(String(req.params.slug));
@@ -111,6 +133,24 @@ superAdminBranchesRouter.patch(
   },
 );
 
+superAdminBranchesRouter.patch(
+  '/:id/branding',
+  validate({ body: UpdateBrandingSchema }),
+  async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const branch = await branchesService.updateBranding(
+        String(req.params.id),
+        req.body,
+        req.user!.sub,
+        metaOf(req),
+      );
+      res.json({ ok: true, data: branch });
+    } catch (err) {
+      next(err);
+    }
+  },
+);
+
 // ---- Trust account (Branch Admin or Super Admin) ----
 
 export const branchTrustAccountRouter = Router();
@@ -124,7 +164,6 @@ branchTrustAccountRouter.patch(
       const branchId = String(req.params.id);
       const user = req.user!;
 
-      // Access control: Super Admin can edit any branch; Branch Admin only their own
       if (user.role === 'BRANCH_ADMIN' && user.branchId !== branchId) {
         res.status(403).json({
           ok: false,

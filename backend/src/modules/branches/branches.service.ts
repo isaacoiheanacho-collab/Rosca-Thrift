@@ -6,10 +6,16 @@ import { logger } from '../../logger';
 import { env } from '../../config/env';
 import { AppError, ConflictError, NotFoundError } from '../../errors';
 import { record } from '../audit/audit.service';
-import { branchesRepository, type BranchRow, type BranchStatus } from './branches.repository';
+import {
+  branchesRepository,
+  type BranchBranding,
+  type BranchRow,
+  type BranchStatus,
+} from './branches.repository';
 import type {
   CreateBranchInput,
   UpdateBranchInput,
+  UpdateBrandingInput,
   UpdateTrustAccountInput,
 } from './branches.schemas';
 
@@ -30,7 +36,20 @@ export interface BranchDto {
   trustAccountComplete: boolean;
   contactEmail: string | null;
   contactPhone: string | null;
+  branding: BranchBranding;
   createdAt: string;
+}
+
+/**
+ * Public (unauthenticated) branch payload. Deliberately minimal — no trust
+ * account details, no internal UUIDs. Used by the join page and the
+ * white-label brand provider.
+ */
+export interface PublicBranchDto {
+  slug: string;
+  name: string;
+  status: BranchStatus;
+  branding: BranchBranding;
 }
 
 function toDto(row: BranchRow): BranchDto {
@@ -53,7 +72,17 @@ function toDto(row: BranchRow): BranchDto {
     trustAccountComplete: trustComplete,
     contactEmail: row.contact_email,
     contactPhone: row.contact_phone,
+    branding: row.branding ?? {},
     createdAt: row.created_at.toISOString(),
+  };
+}
+
+function toPublicDto(row: BranchRow): PublicBranchDto {
+  return {
+    slug: row.slug,
+    name: row.name,
+    status: row.status,
+    branding: row.branding ?? {},
   };
 }
 
@@ -119,6 +148,23 @@ export class BranchesService {
     return toDto(row);
   }
 
+  /**
+   * Public lookup by slug. Only returns non-sensitive fields, and only for
+   * ACTIVE branches. Used by the login/join page before authentication.
+   */
+  async getPublicBySlug(slug: string): Promise<PublicBranchDto> {
+    const row = await branchesRepository.findBySlug(slug);
+    if (!row) throw new NotFoundError('Branch');
+    if (row.status !== 'ACTIVE') {
+      throw new AppError({
+        code: 'BRANCH_NOT_ACTIVE',
+        httpStatus: 403,
+        message: 'This branch is not currently accepting members',
+      });
+    }
+    return toPublicDto(row);
+  }
+
   async update(
     id: string,
     input: UpdateBranchInput,
@@ -146,6 +192,34 @@ export class BranchesService {
     });
 
     logger.info({ branchId: id, fields: Object.keys(input) }, 'Branch updated');
+    return toDto(updated);
+  }
+
+  async updateBranding(
+    branchId: string,
+    input: UpdateBrandingInput,
+    actorId: string,
+    meta: RequestMeta,
+  ): Promise<BranchDto> {
+    const existing = await branchesRepository.findById(branchId);
+    if (!existing) throw new NotFoundError('Branch');
+
+    const updated = await branchesRepository.updateBranding(branchId, input);
+
+    await record({
+      actorId,
+      action: 'BRANCH_BRANDING_UPDATED',
+      entityType: 'branch',
+      entityId: branchId,
+      ipAddress: meta.ipAddress,
+      userAgent: meta.userAgent,
+      metadata: { fields: Object.keys(input) },
+    });
+
+    logger.info(
+      { branchId, fields: Object.keys(input) },
+      'Branch branding updated',
+    );
     return toDto(updated);
   }
 
