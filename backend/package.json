@@ -25,7 +25,8 @@
     "test:renewal": "ts-node --transpile-only scripts/test-tenure-renewal.ts",
     "test:notifications": "ts-node --transpile-only scripts/test-notifications.ts",
     "test:stats": "ts-node --transpile-only scripts/test-stats.ts",
-    "test:payout-failure": "ts-node --transpile-only scripts/test-payout-failure.ts"
+    "test:payout-failure": "ts-node --transpile-only scripts/test-payout-failure.ts",
+    "test:consent": "ts-node --transpile-only scripts/test-consent.ts"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.1146.0",

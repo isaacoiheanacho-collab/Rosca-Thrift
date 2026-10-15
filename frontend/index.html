@@ -1,0 +1,277 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+  <meta name="theme-color" content="#00daf3">
+  <title>ROSCA Thrift &amp; Savings</title>
+
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&display=swap" rel="stylesheet">
+
+  <link rel="stylesheet" href="/assets/css/tokens.css">
+  <link rel="stylesheet" href="/assets/css/base.css">
+
+  <style>
+    /* Page-specific styles for the landing page */
+    .page {
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+    }
+
+    .top-bar {
+      padding: var(--space-5) var(--space-5) 0;
+      display: flex;
+      justify-content: center;
+    }
+
+    .hero {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      text-align: center;
+      padding: var(--space-8) var(--space-5);
+      position: relative;
+      overflow: hidden;
+    }
+
+    .hero__glow {
+      position: absolute;
+      top: 20%;
+      left: 50%;
+      transform: translateX(-50%);
+      width: 600px;
+      height: 400px;
+      background: radial-gradient(circle, rgba(0, 218, 243, 0.12) 0%, transparent 70%);
+      pointer-events: none;
+    }
+
+    .hero__content {
+      position: relative;
+      max-width: 640px;
+    }
+
+    .hero__eyebrow {
+      display: inline-flex;
+      align-items: center;
+      gap: var(--space-2);
+      padding: var(--space-1) var(--space-4);
+      background: rgba(0, 218, 243, 0.1);
+      border: 1px solid rgba(0, 218, 243, 0.25);
+      border-radius: var(--radius-full);
+      color: var(--brand-primary);
+      font-size: 12px;
+      font-weight: 700;
+      letter-spacing: 0.1em;
+      text-transform: uppercase;
+      margin-bottom: var(--space-6);
+    }
+
+    .hero__eyebrow .dot {
+      width: 6px;
+      height: 6px;
+      border-radius: 50%;
+      background: var(--brand-primary);
+      box-shadow: 0 0 8px var(--brand-primary);
+      animation: pulse 2s ease-in-out infinite;
+    }
+
+    @keyframes pulse {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0.4; }
+    }
+
+    .hero h1 {
+      font-size: 48px;
+      line-height: 1.1;
+      margin-bottom: var(--space-5);
+    }
+
+    .hero h1 .highlight {
+      color: var(--brand-primary);
+    }
+
+    .hero__subtitle {
+      font-size: 18px;
+      color: var(--on-surface-variant);
+      line-height: 1.6;
+      margin-bottom: var(--space-7);
+    }
+
+    .hero__actions {
+      display: flex;
+      gap: var(--space-3);
+      justify-content: center;
+      flex-wrap: wrap;
+    }
+
+    .btn {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: var(--space-2);
+      padding: var(--space-3) var(--space-6);
+      border-radius: var(--radius-md);
+      border: 1px solid transparent;
+      font-family: inherit;
+      font-size: 15px;
+      font-weight: 600;
+      line-height: 1;
+      cursor: pointer;
+      transition: all var(--transition-fast);
+      text-decoration: none;
+      white-space: nowrap;
+      min-width: 140px;
+    }
+
+    .btn:hover { text-decoration: none; }
+
+    .btn--primary {
+      background: var(--brand-primary);
+      color: #0a0a0c;
+    }
+
+    .btn--primary:hover {
+      filter: brightness(1.1);
+      box-shadow: 0 0 0 4px rgba(0, 218, 243, 0.15);
+      opacity: 1;
+    }
+
+    .btn--ghost {
+      background: transparent;
+      color: var(--on-surface);
+      border-color: var(--outline-variant);
+    }
+
+    .btn--ghost:hover {
+      background: var(--surface-container);
+      border-color: var(--outline);
+      opacity: 1;
+    }
+
+    .footer {
+      padding: var(--space-6) var(--space-5);
+      text-align: center;
+      color: var(--on-surface-variant);
+      font-size: 13px;
+      border-top: 1px solid var(--outline-variant);
+    }
+
+    .footer__platform {
+      font-weight: 600;
+      letter-spacing: 0.08em;
+    }
+
+    /* On mobile, tighten the hero */
+    @media (max-width: 640px) {
+      .hero h1 { font-size: 34px; }
+      .hero__subtitle { font-size: 16px; }
+      .top-bar { padding-top: var(--space-6); }
+    }
+  </style>
+</head>
+<body>
+
+  <div class="page">
+
+    <!-- Top bar with the two-layer brand mark -->
+    <header class="top-bar">
+      <div class="brand-mark brand-mark--on-dark" id="brand-mark">
+        <span class="brand-mark__branch" data-brand="name">Loading...</span>
+        <span class="brand-mark__divider"></span>
+        <span class="brand-mark__platform">ROSCA Thrift &amp; Savings</span>
+      </div>
+    </header>
+
+    <!-- Hero -->
+    <main class="hero">
+      <div class="hero__glow"></div>
+      <div class="hero__content">
+        <div class="hero__eyebrow">
+          <span class="dot"></span>
+          <span>Rotating Savings Circle</span>
+        </div>
+        <h1>
+          Save together.<br>
+          <span class="highlight">Grow together.</span>
+        </h1>
+        <p class="hero__subtitle">
+          12 members. 12 months. Every month, one member receives the pool.
+          Transparent, verified, and built on trust.
+        </p>
+        <div class="hero__actions">
+          <a href="/auth/login.html" class="btn btn--primary">Log in</a>
+          <a href="/auth/register.html" class="btn btn--ghost">Register</a>
+        </div>
+      </div>
+    </main>
+
+    <!-- Footer -->
+    <footer class="footer">
+      <div class="footer__platform">ROSCA THRIFT &amp; SAVINGS</div>
+      <div class="text-xs mt-4">
+        A platform for community savings circles
+      </div>
+    </footer>
+
+  </div>
+
+  <script>
+    /**
+     * Load the branch branding from the public API and apply it.
+     *
+     * Branch source priority:
+     *   1. ?branch=slug in the URL (for join links)
+     *   2. Fallback: 'dunamis-hq' for now — will change when login is wired
+     *
+     * Replaces: [data-brand="name"] with branding.displayName
+     * Sets:     --brand-primary / --brand-accent CSS variables
+     */
+    (async function loadBranding() {
+      const params = new URLSearchParams(location.search);
+      const slug = params.get('branch') || 'dunamis-hq';
+      const apiBase = 'https://rosca-thrift.onrender.com';
+
+      try {
+        const res = await fetch(`${apiBase}/api/branches/${slug}/public`);
+        const json = await res.json();
+
+        if (!json.ok) {
+          console.warn('[branding] API error:', json.error);
+          return;
+        }
+
+        const { name, branding } = json.data;
+
+        // Branch name → the top slot of the brand mark
+        const branchEl = document.querySelector('[data-brand="name"]');
+        if (branchEl && branding && branding.displayName) {
+          branchEl.textContent = branding.displayName;
+        } else if (branchEl) {
+          branchEl.textContent = name;
+        }
+
+        // Colors → CSS variables
+        if (branding && branding.primaryColor) {
+          document.documentElement.style.setProperty('--brand-primary', branding.primaryColor);
+        }
+        if (branding && branding.accentColor) {
+          document.documentElement.style.setProperty('--brand-accent', branding.accentColor);
+        }
+
+        // Page title
+        document.title = `${name} — ROSCA Thrift & Savings`;
+
+        console.log('[branding] Applied:', { name, branding });
+      } catch (err) {
+        console.error('[branding] Fetch failed:', err);
+      }
+    })();
+  </script>
+
+</body>
+</html>

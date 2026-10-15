@@ -1,12 +1,12 @@
 /**
- * Auth schemas - phone-first with optional branch assignment.
+ * Auth module — request schemas.
  *
- * Registration:
- *   - SUPER_ADMIN_PHONE matching phone → no branchSlug needed, role=SUPER_ADMIN
- *   - Everyone else → branchSlug required, role=SAVER, branch assigned
+ * Register requires explicit consent to Terms and Privacy. Both must be
+ * accepted, and both must reference the current version strings.
  */
 
 import { z } from 'zod';
+import { CONSENT_VERSIONS } from '../consent/consent.constants';
 
 const PhoneSchema = z
   .string()
@@ -26,33 +26,35 @@ const FullNameSchema = z
   .min(2, 'Full name must be at least 2 characters')
   .max(120, 'Full name is too long');
 
-const EmailSchema = z.string().trim().toLowerCase().email('Invalid email address');
-
-const OtpCodeSchema = z
-  .string()
-  .trim()
-  .regex(/^\d{6}$/, 'Code must be 6 digits');
-
-const BranchSlugSchema = z
+const SlugSchema = z
   .string()
   .trim()
   .toLowerCase()
-  .regex(
-    /^[a-z0-9][a-z0-9-]*[a-z0-9]$/,
-    'Branch slug must be lowercase alphanumeric with dashes (no leading/trailing dash)',
-  );
+  .min(3)
+  .max(50)
+  .regex(/^[a-z0-9][a-z0-9-]*[a-z0-9]$/, 'Invalid branch slug');
+
+const ConsentItemSchema = z.object({
+  accepted: z.literal(true, {
+    errorMap: () => ({ message: 'You must accept this document to continue' }),
+  }),
+  version: z.string().trim().min(1),
+});
 
 export const RegisterSchema = z.object({
   phone: PhoneSchema,
   password: PasswordSchema,
   fullName: FullNameSchema,
-  email: EmailSchema.optional(),
-  branchSlug: BranchSlugSchema.optional(),
+  branchSlug: SlugSchema.optional(),
+  consents: z.object({
+    terms: ConsentItemSchema,
+    privacy: ConsentItemSchema,
+  }),
 });
 
 export const VerifyPhoneSchema = z.object({
   phone: PhoneSchema,
-  code: OtpCodeSchema,
+  code: z.string().trim().regex(/^\d{6}$/, 'Code must be 6 digits'),
 });
 
 export const LoginSchema = z.object({
@@ -70,9 +72,30 @@ export const ForgotPasswordSchema = z.object({
 
 export const ResetPasswordSchema = z.object({
   phone: PhoneSchema,
-  code: OtpCodeSchema,
+  code: z.string().trim().regex(/^\d{6}$/, 'Code must be 6 digits'),
   newPassword: PasswordSchema,
 });
+
+/**
+ * Ensures the incoming version strings match the current platform versions.
+ * If a client sends stale versions, they get a clear error telling them
+ * to refresh the page and try again.
+ */
+export function assertCurrentVersions(consents: {
+  terms: { version: string };
+  privacy: { version: string };
+}): void {
+  if (consents.terms.version !== CONSENT_VERSIONS.TERMS) {
+    throw new Error(
+      `Terms version mismatch. Current: ${CONSENT_VERSIONS.TERMS}, got: ${consents.terms.version}. Refresh and try again.`,
+    );
+  }
+  if (consents.privacy.version !== CONSENT_VERSIONS.PRIVACY) {
+    throw new Error(
+      `Privacy version mismatch. Current: ${CONSENT_VERSIONS.PRIVACY}, got: ${consents.privacy.version}. Refresh and try again.`,
+    );
+  }
+}
 
 export type RegisterInput = z.infer<typeof RegisterSchema>;
 export type VerifyPhoneInput = z.infer<typeof VerifyPhoneSchema>;

@@ -1,8 +1,5 @@
 /**
- * Users service — profile management + phone change flow.
- *
- * Phone change: user requests → OTP to NEW phone → verify → all sessions revoked.
- * Password change: requires current password, revokes all other sessions.
+ * Users service — profile management, phone change flow, consent management.
  */
 
 import { withTransaction } from '../../db';
@@ -12,6 +9,8 @@ import { createAndSendOtp, verifyOtp } from '../../utils/otp';
 import { AppError, ConflictError, NotFoundError } from '../../errors';
 import { authRepository } from '../auth/auth.repository';
 import { record } from '../audit/audit.service';
+import { consentService } from '../consent/consent.service';
+import type { ConsentType } from '../consent/consent.constants';
 import { usersRepository } from './users.repository';
 import type { UserRow } from '../auth/auth.repository';
 import type {
@@ -38,6 +37,16 @@ export interface PublicUser {
   createdAt: string;
 }
 
+export interface ConsentDto {
+  id: string;
+  consentType: ConsentType;
+  documentVersion: string;
+  documentSlug: string;
+  acceptedAt: string;
+  withdrawnAt: string | null;
+  withdrawalReason: string | null;
+}
+
 export function toPublicUser(row: UserRow): PublicUser {
   return {
     id: row.id,
@@ -52,14 +61,30 @@ export function toPublicUser(row: UserRow): PublicUser {
   };
 }
 
+function toConsentDto(row: {
+  id: string;
+  consent_type: ConsentType;
+  document_version: string;
+  document_slug: string;
+  accepted_at: Date;
+  withdrawn_at: Date | null;
+  withdrawal_reason: string | null;
+}): ConsentDto {
+  return {
+    id: row.id,
+    consentType: row.consent_type,
+    documentVersion: row.document_version,
+    documentSlug: row.document_slug,
+    acceptedAt: row.accepted_at.toISOString(),
+    withdrawnAt: row.withdrawn_at?.toISOString() ?? null,
+    withdrawalReason: row.withdrawal_reason,
+  };
+}
+
 export class UsersService {
   async getMe(userId: string): Promise<PublicUser> {
     const user = await usersRepository.findById(userId);
-
-    if (!user) {
-      throw new NotFoundError('User');
-    }
-
+    if (!user) throw new NotFoundError('User');
     return toPublicUser(user);
   }
 
@@ -70,7 +95,6 @@ export class UsersService {
   ): Promise<PublicUser> {
     if (input.email !== undefined && input.email !== null) {
       const taken = await usersRepository.emailExists(input.email, userId);
-
       if (taken) {
         throw new ConflictError('Email is already in use', 'USER_EMAIL_TAKEN');
       }
@@ -92,7 +116,6 @@ export class UsersService {
     });
 
     logger.info({ userId }, 'Profile updated');
-
     return toPublicUser(updated);
   }
 
@@ -102,13 +125,9 @@ export class UsersService {
     meta: RequestMeta,
   ): Promise<{ ok: true }> {
     const user = await usersRepository.findById(userId);
-
-    if (!user) {
-      throw new NotFoundError('User');
-    }
+    if (!user) throw new NotFoundError('User');
 
     const ok = await verifyPassword(input.currentPassword, user.password_hash);
-
     if (!ok) {
       throw new AppError({
         code: 'USER_WRONG_PASSWORD',
@@ -121,7 +140,6 @@ export class UsersService {
 
     await withTransaction(async (tx) => {
       await usersRepository.updatePassword(userId, newHash, tx);
-
       await record(
         {
           actorId: userId,
@@ -135,11 +153,8 @@ export class UsersService {
       );
     });
 
-    // Revoke all sessions — user must re-login everywhere.
     await authRepository.revokeAllUserTokens(userId);
-
     logger.info({ userId }, 'Password changed, sessions revoked');
-
     return { ok: true };
   }
 
@@ -149,10 +164,7 @@ export class UsersService {
     meta: RequestMeta,
   ): Promise<{ ok: true }> {
     const currentUser = await usersRepository.findById(userId);
-
-    if (!currentUser) {
-      throw new NotFoundError('User');
-    }
+    if (!currentUser) throw new NotFoundError('User');
 
     if (currentUser.phone === input.newPhone) {
       throw new AppError({
@@ -163,13 +175,11 @@ export class UsersService {
     }
 
     const existing = await usersRepository.findByPhone(input.newPhone);
-
     if (existing) {
       throw new ConflictError('Phone is already in use', 'USER_PHONE_TAKEN');
     }
 
     const send = await createAndSendOtp(input.newPhone, 'verify_phone', meta.ipAddress);
-
     if (!send.ok) {
       throw new AppError({
         code: 'USER_OTP_SEND_FAILED',
@@ -179,7 +189,6 @@ export class UsersService {
     }
 
     logger.info({ userId }, 'Phone change OTP dispatched');
-
     return { ok: true };
   }
 
@@ -189,7 +198,6 @@ export class UsersService {
     meta: RequestMeta,
   ): Promise<{ ok: true }> {
     const verify = await verifyOtp(input.newPhone, 'verify_phone', input.code);
-
     if (!verify.ok) {
       throw new AppError({
         code: 'USER_OTP_INVALID',
@@ -200,7 +208,6 @@ export class UsersService {
 
     await withTransaction(async (tx) => {
       await usersRepository.updatePhone(userId, input.newPhone, tx);
-
       await record(
         {
           actorId: userId,
@@ -215,12 +222,52 @@ export class UsersService {
       );
     });
 
-    // Security: revoke all sessions — must re-login with the new phone.
     await authRepository.revokeAllUserTokens(userId);
-
     logger.info({ userId }, 'Phone changed, sessions revoked');
-
     return { ok: true };
+  }
+
+  // ─────────────────────────────────────────────────────────────
+  // Consent management
+  // ─────────────────────────────────────────────────────────────
+
+  /** Latest consent per type — includes withdrawn ones. */
+  async getMyConsents(userId: string): Promise<ConsentDto[]> {
+    const rows = await consentService.latestForUser(userId);
+    return rows.map(toConsentDto);
+  }
+
+  /** Full history for audit — user sees their own. */
+  async getMyConsentHistory(userId: string): Promise<ConsentDto[]> {
+    const rows = await consentService.listForUser(userId);
+    return rows.map(toConsentDto);
+  }
+
+  /** Check whether the user is currently permitted to withdraw. */
+  async canWithdrawConsent(userId: string): Promise<{
+    allowed: boolean;
+    reason?: string;
+  }> {
+    const result = await consentService.canWithdraw(userId);
+    return {
+      allowed: result.allowed,
+      reason: result.reason,
+    };
+  }
+
+  /** Withdraw a specific consent. Throws if precondition fails. */
+  async withdrawConsent(
+    userId: string,
+    consentType: ConsentType,
+    meta: RequestMeta,
+  ): Promise<ConsentDto> {
+    const row = await consentService.withdraw({
+      userId,
+      consentType,
+      ipAddress: meta.ipAddress ?? null,
+      userAgent: meta.userAgent ?? null,
+    });
+    return toConsentDto(row);
   }
 }
 

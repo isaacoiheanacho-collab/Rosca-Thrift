@@ -1,0 +1,174 @@
+/**
+ * Base styles — reset, typography, layout helpers, brand mark.
+ */
+
+*, *::before, *::after {
+  box-sizing: border-box;
+}
+
+html, body {
+  margin: 0;
+  padding: 0;
+  background: var(--surface);
+  color: var(--on-surface);
+  font-family: var(--font-sans);
+  font-size: 16px;
+  line-height: 1.6;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+body {
+  min-height: 100vh;
+  padding-bottom: env(safe-area-inset-bottom);
+}
+
+/* ── Typography ──────────────────────────────────────────── */
+
+h1, h2, h3, h4, h5, h6 {
+  margin: 0 0 var(--space-4) 0;
+  font-weight: 600;
+  line-height: 1.2;
+  letter-spacing: -0.01em;
+}
+
+h1 { font-size: 40px; font-weight: 800; letter-spacing: -0.02em; }
+h2 { font-size: 28px; font-weight: 700; }
+h3 { font-size: 22px; font-weight: 600; }
+h4 { font-size: 18px; font-weight: 600; }
+
+p {
+  margin: 0 0 var(--space-4) 0;
+}
+
+a {
+  color: var(--brand-primary);
+  text-decoration: none;
+  transition: opacity var(--transition-fast);
+}
+
+a:hover {
+  opacity: 0.85;
+  text-decoration: underline;
+}
+
+/* ── Brand mark ──────────────────────────────────────────────
+ * The two-layer logo: branch name on top, platform tagline below,
+ * gold divider between.
+ *
+ * Layout:
+ *   ┌─────────────────────────────┐
+ *   │  BRANCH NAME (dynamic)      │   ← uppercase, shrinks to fit
+ *   │  ─────────────────────────  │   ← gold divider
+ *   │  ROSCA THRIFT & SAVINGS     │   ← fixed platform tagline
+ *   └─────────────────────────────┘
+ */
+
+.brand-mark {
+  display: inline-block;
+  text-align: center;
+  font-family: var(--font-sans);
+  line-height: 1.1;
+  user-select: none;
+}
+
+.brand-mark__branch {
+  display: block;
+  font-size: 28px;
+  font-weight: 800;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--on-surface);
+  /* Shrink to fit if the branch name is long */
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.brand-mark__divider {
+  display: block;
+  height: 2px;
+  background: var(--platform-gold);
+  margin: 6px 0;
+  width: 100%;
+}
+
+.brand-mark__platform {
+  display: block;
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--on-surface-variant);
+  white-space: nowrap;
+}
+
+/* Compact version for the top bar */
+.brand-mark--compact .brand-mark__branch {
+  font-size: 15px;
+  letter-spacing: 0.04em;
+}
+
+.brand-mark--compact .brand-mark__divider {
+  height: 1px;
+  margin: 3px 0;
+}
+
+.brand-mark--compact .brand-mark__platform {
+  font-size: 9px;
+  letter-spacing: 0.14em;
+}
+
+/* On dark backgrounds, tint the platform text with the brand color */
+.brand-mark--on-dark .brand-mark__branch {
+  color: #ffffff;
+}
+
+.brand-mark--on-dark .brand-mark__platform {
+  color: var(--brand-primary);
+}
+
+/* ── Utility classes ─────────────────────────────────────── */
+
+.container {
+  max-width: 1200px;
+  margin: 0 auto;
+  padding: 0 var(--space-5);
+}
+
+@media (min-width: 768px) {
+  .container { padding: 0 var(--space-6); }
+}
+
+.stack > * + * { margin-top: var(--space-4); }
+.stack-lg > * + * { margin-top: var(--space-5); }
+
+.row {
+  display: flex;
+  gap: var(--space-3);
+  align-items: center;
+}
+
+.row-between {
+  display: flex;
+  gap: var(--space-3);
+  align-items: center;
+  justify-content: space-between;
+}
+
+.text-muted { color: var(--on-surface-variant); }
+.text-sm { font-size: 14px; }
+.text-xs { font-size: 12px; }
+.text-mono { font-family: var(--font-mono); }
+
+.text-center { text-align: center; }
+.text-accent { color: var(--brand-primary); }
+
+.mt-0 { margin-top: 0; }
+.mt-4 { margin-top: var(--space-4); }
+.mt-6 { margin-top: var(--space-5); }
+.mt-8 { margin-top: var(--space-6); }
+.mb-4 { margin-bottom: var(--space-4); }
+.mb-6 { margin-bottom: var(--space-5); }
+.mb-8 { margin-bottom: var(--space-6); }

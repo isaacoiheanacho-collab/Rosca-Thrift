@@ -49,7 +49,16 @@ export const VerifyPhoneChangeSchema = z.object({
   code: OtpCodeSchema,
 });
 
+/**
+ * Withdraw consent — allowed consent types are the platform-level ones.
+ * BRANCH_TERMS is handled separately in the branch module (future work).
+ */
+export const WithdrawConsentSchema = z.object({
+  consentType: z.enum(['TERMS', 'PRIVACY']),
+});
+
 export type UpdateProfileInput = z.infer<typeof UpdateProfileSchema>;
 export type ChangePasswordInput = z.infer<typeof ChangePasswordSchema>;
 export type RequestPhoneChangeInput = z.infer<typeof RequestPhoneChangeSchema>;
 export type VerifyPhoneChangeInput = z.infer<typeof VerifyPhoneChangeSchema>;
+export type WithdrawConsentInput = z.infer<typeof WithdrawConsentSchema>;
