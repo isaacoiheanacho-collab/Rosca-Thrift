@@ -9,7 +9,7 @@ import { logger } from './logger';
 import { pool, testConnection } from './db';
 import { redis, testRedis, closeRedis } from './utils/redis';
 import { testS3 } from './utils/s3';
-import { startAllWorkers, stopAllWorkers } from './queue';
+import { stopAllWorkers } from './queue';
 import { initSocketIO, closeSocketIO } from './modules/realtime/socket';
 import { ensureWebPushInitialised } from './utils/web-push';
 import { requestId } from './middleware/requestId';
@@ -21,6 +21,7 @@ import {
   publicBranchesRouter,
   superAdminBranchesRouter,
   branchTrustAccountRouter,
+  branchAdminBranchesRouter,
   kycRouter,
   branchAdminKycRouter,
   superAdminKycRouter,
@@ -34,6 +35,7 @@ import {
   tenantVisibilityRouter,
   receiptsRouter,
   branchAdminPoolAccountRouter,
+  saverPoolAccountRouter,
   superAdminMaintenanceAccountRouter,
   superAdminBranchPoolAccountRouter,
   branchAdminPayoutsRouter,
@@ -124,20 +126,24 @@ app.use('/api/tenants/me', tenantRenewalRouter);
 // ---- Tenure renewal (branch admin) ----
 app.use('/api/branch-admin/tenants', branchAdminRenewalRouter);
 
+// ---- Branch admin branch content ----
+app.use('/api/branch-admin/branches', branchAdminBranchesRouter);
+
 // ---- Receipts ----
 app.use('/api/receipts', receiptsRouter);
 
 // ---- Notifications ----
 app.use('/api/notifications', notificationsRouter);
 
-// ---- Pool accounts / maintenance account ----
-app.use('/api/branch-admin/pool-account', branchAdminPoolAccountRouter);
-app.use('/api/super-admin/maintenance-account', superAdminMaintenanceAccountRouter);
-app.use('/api/super-admin/branch-pool-account', superAdminBranchPoolAccountRouter);
-
 // ---- Stats ----
 app.use('/api/super-admin/stats', superAdminStatsRouter);
 app.use('/api/branch-admin/stats', branchAdminStatsRouter);
+
+// ---- Pool accounts / maintenance account ----
+app.use('/api/branch-admin/pool-account', branchAdminPoolAccountRouter);
+app.use('/api/saver/pool-account', saverPoolAccountRouter);
+app.use('/api/super-admin/maintenance-account', superAdminMaintenanceAccountRouter);
+app.use('/api/super-admin/branch-pool-account', superAdminBranchPoolAccountRouter);
 
 // ---- Super admin branches (must come after specific /api/super-admin paths) ----
 app.use('/api/super-admin/branches', superAdminBranchesRouter);
@@ -152,14 +158,12 @@ initSocketIO(httpServer);
 
 async function shutdown(signal: string): Promise<void> {
   logger.info(`Received ${signal}, shutting down...`);
-
   await Promise.allSettled([
     stopAllWorkers(),
     closeSocketIO(),
     pool.end(),
     closeRedis(),
   ]);
-
   httpServer.close();
   process.exit(0);
 }
@@ -171,7 +175,7 @@ httpServer.listen(env.PORT, () => {
   logger.info(`ROSCA backend listening on http://localhost:${env.PORT}`);
   logger.info(`Health check: http://localhost:${env.PORT}/health`);
   ensureWebPushInitialised();
-  startAllWorkers();
+  // startAllWorkers(); // DISABLED: Upstash quota exceeded - will re-enable
 
   void (async () => {
     if (!env.SUPER_ADMIN_PHONE) return;

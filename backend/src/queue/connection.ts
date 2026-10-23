@@ -7,6 +7,12 @@
  *
  * `maxRetriesPerRequest: null` is REQUIRED by BullMQ - it manages retries
  * internally and needs the client to never fail a command on its own.
+ *
+ * Tuning for free-tier providers (Upstash, Redis Labs, etc.):
+ *  - `enableReadyCheck: false` avoids extra INFO commands on connect.
+ *  - `retryStrategy` prevents rapid reconnect storms.
+ *  - `keepAlive` avoids frequent TCP keepalive pings.
+ *  - `connectTimeout` prevents slow-boot zombies.
  */
 
 import { Redis, type RedisOptions } from 'ioredis';
@@ -14,9 +20,12 @@ import { env } from '../config/env';
 import { logger } from '../logger';
 
 const connectionOptions: RedisOptions = {
-  maxRetriesPerRequest: null,
-  enableReadyCheck: false,
-  retryStrategy: (times) => Math.min(times * 200, 3000),
+  maxRetriesPerRequest: null,        // Required by BullMQ
+  enableReadyCheck: false,           // Skip extra INFO call on connect
+  retryStrategy: (times) => Math.min(times * 1000, 15000), // Max 15s backoff
+  keepAlive: 30000,                  // 30s TCP keepalive
+  connectTimeout: 15000,             // 15s connect timeout
+  enableOfflineQueue: false,         // Don't queue commands when offline
 };
 
 /** Create a fresh BullMQ-compatible Redis connection. */

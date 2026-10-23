@@ -60,6 +60,7 @@ export const VerifyPhoneSchema = z.object({
 export const LoginSchema = z.object({
   phone: PhoneSchema,
   password: z.string().min(1, 'Password is required'),
+  branchSlug: SlugSchema.optional(), // <-- NEW
 });
 
 export const RefreshSchema = z.object({
@@ -76,11 +77,6 @@ export const ResetPasswordSchema = z.object({
   newPassword: PasswordSchema,
 });
 
-/**
- * Ensures the incoming version strings match the current platform versions.
- * If a client sends stale versions, they get a clear error telling them
- * to refresh the page and try again.
- */
 export function assertCurrentVersions(consents: {
   terms: { version: string };
   privacy: { version: string };

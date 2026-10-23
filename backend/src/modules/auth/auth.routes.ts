@@ -11,6 +11,7 @@ import { Router, type Request, type Response, type NextFunction } from 'express'
 import rateLimit from 'express-rate-limit';
 import { validate } from '../../middleware/validate';
 import { requireAuth } from '../../middleware/auth';
+import { AppError } from '../../errors';
 import { authService, type RequestMeta } from './auth.service';
 import {
   ForgotPasswordSchema,
@@ -50,6 +51,26 @@ router.post(
   async (req: Request, res: Response, next: NextFunction) => {
     try {
       const result = await authService.register(req.body, metaOf(req));
+      res.status(201).json({ ok: true, data: result });
+    } catch (err) {
+      next(err);
+    }
+  },
+);
+
+router.post(
+  '/register-super-admin',
+  async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      if (req.body.secretKey !== env.SUPER_ADMIN_REGISTRATION_SECRET) {
+        throw new AppError({
+          code: 'AUTH_INVALID_SECRET',
+          httpStatus: 403,
+          message: 'Invalid platform secret key',
+        });
+      }
+      
+      const result = await authService.registerSuperAdmin(req.body, metaOf(req));
       res.status(201).json({ ok: true, data: result });
     } catch (err) {
       next(err);

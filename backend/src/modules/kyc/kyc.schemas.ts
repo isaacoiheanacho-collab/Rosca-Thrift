@@ -10,6 +10,12 @@ const LegalNameSchema = z
   .min(2, 'Legal name must be at least 2 characters')
   .max(200, 'Legal name is too long');
 
+const AccountNameSchema = z
+  .string()
+  .trim()
+  .min(2, 'Account name must be at least 2 characters')
+  .max(200, 'Account name is too long');
+
 const BankNameSchema = z
   .string()
   .trim()
@@ -29,6 +35,7 @@ const SortCodeSchema = z
 
 export const SubmitKycSchema = z.object({
   legalName: LegalNameSchema,
+  accountName: AccountNameSchema,
   bankName: BankNameSchema,
   accountNumber: AccountNumberSchema,
   sortCode: SortCodeSchema,
@@ -43,9 +50,10 @@ export const RejectKycSchema = z.object({
 });
 
 export const ListKycQuerySchema = z.object({
-  limit: z.coerce.number().int().min(1).max(100).default(20),
+  limit: z.coerce.number().int().min(1).max(100).default(50),
   offset: z.coerce.number().int().min(0).default(0),
-  status: z.enum(['PENDING', 'APPROVED', 'REJECTED']).optional(),
+  status: z.enum(['PENDING', 'APPROVED', 'REJECTED', 'NOT_SUBMITTED']).optional(),
+  tenantId: z.string().uuid().optional(),
 });
 
 export type SubmitKycInput = z.infer<typeof SubmitKycSchema>;

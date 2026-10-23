@@ -12,6 +12,10 @@ export interface BranchPoolAccountRow {
   account_number: string;
   sort_code: string;
   notes: string | null;
+  status: 'PENDING' | 'APPROVED' | 'REJECTED';
+  rejection_reason: string | null;
+  verified_by: string | null;
+  verified_at: Date | null;
   created_at: Date;
   updated_at: Date;
 }
@@ -56,7 +60,11 @@ export class PoolAccountsRepository {
          bank_name = EXCLUDED.bank_name,
          account_number = EXCLUDED.account_number,
          sort_code = EXCLUDED.sort_code,
-         notes = EXCLUDED.notes
+         notes = EXCLUDED.notes,
+         status = 'PENDING',
+         rejection_reason = NULL,
+         verified_by = NULL,
+         verified_at = NULL
        RETURNING *`,
       [
         branchId,
@@ -66,6 +74,28 @@ export class PoolAccountsRepository {
         data.sortCode,
         data.notes ?? null,
       ],
+    );
+    return result.rows[0]!;
+  }
+
+  async approveBranchAccount(branchId: string, adminId: string): Promise<BranchPoolAccountRow> {
+    const result = await pool.query<BranchPoolAccountRow>(
+      `UPDATE branch_pool_accounts
+       SET status = 'APPROVED', verified_by = $2, verified_at = NOW(), rejection_reason = NULL
+       WHERE branch_id = $1
+       RETURNING *`,
+      [branchId, adminId],
+    );
+    return result.rows[0]!;
+  }
+
+  async rejectBranchAccount(branchId: string, adminId: string, reason: string): Promise<BranchPoolAccountRow> {
+    const result = await pool.query<BranchPoolAccountRow>(
+      `UPDATE branch_pool_accounts
+       SET status = 'REJECTED', verified_by = $2, verified_at = NOW(), rejection_reason = $3
+       WHERE branch_id = $1
+       RETURNING *`,
+      [branchId, adminId, reason],
     );
     return result.rows[0]!;
   }

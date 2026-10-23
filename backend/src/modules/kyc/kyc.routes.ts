@@ -128,7 +128,8 @@ branchAdminKycRouter.get(
       const q = req.query as unknown as {
         limit: number;
         offset: number;
-        status?: 'PENDING' | 'APPROVED' | 'REJECTED';
+        status?: any;
+        tenantId?: string;
       };
       const user = req.user!;
 
@@ -141,6 +142,7 @@ branchAdminKycRouter.get(
         offset: q.offset,
         status: q.status,
         branchId: branchFilter,
+        tenantId: q.tenantId,
       });
       res.json({ ok: true, data: { ...result, limit: q.limit, offset: q.offset } });
     } catch (err) {
@@ -203,12 +205,14 @@ superAdminKycRouter.get(
       const q = req.query as unknown as {
         limit: number;
         offset: number;
-        status?: 'PENDING' | 'APPROVED' | 'REJECTED';
+        status?: 'PENDING' | 'APPROVED' | 'REJECTED' | 'NOT_SUBMITTED';
+        tenantId?: string;
       };
       const result = await kycService.list({
         limit: q.limit,
         offset: q.offset,
         status: q.status,
+        tenantId: q.tenantId,
       });
       res.json({ ok: true, data: { ...result, limit: q.limit, offset: q.offset } });
     } catch (err) {

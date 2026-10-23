@@ -12,6 +12,8 @@ export interface PlatformCounts {
   branchesActive: number;
   branchesSuspended: number;
   branchesArchived: number;
+  branchesPending: number;      // <-- Onboarding pending
+  branchesPendingKyc: number;   // <-- Branch admin KYC pending
 
   tenantsFilling: number;
   tenantsActive: number;
@@ -116,11 +118,28 @@ export class StatsRepository {
 
     const membersTotal = Number(userCounts.rows[0]?.count ?? '0');
 
+    // Direct count for pending branches (Onboarding)
+    const pendingBranchResult = await pool.query<{ count: string }>(
+      `SELECT COUNT(*)::text AS count FROM branches WHERE onboarding_status = 'PENDING'`
+    );
+    const branchesPending = Number(pendingBranchResult.rows[0]?.count ?? '0');
+
+    // Direct count for pending KYC (Branch Admins)
+    const pendingKycResult = await pool.query<{ count: string }>(
+      `SELECT COUNT(*)::text AS count 
+       FROM kyc_submissions k
+       JOIN users u ON u.id = k.user_id
+       WHERE k.status = 'PENDING' AND u.role = 'BRANCH_ADMIN'`
+    );
+    const branchesPendingKyc = Number(pendingKycResult.rows[0]?.count ?? '0');
+
     return {
       branchesTotal: this.sumStatusMap(branchMap),
       branchesActive: branchMap.ACTIVE ?? 0,
       branchesSuspended: branchMap.SUSPENDED ?? 0,
       branchesArchived: branchMap.ARCHIVED ?? 0,
+      branchesPending,
+      branchesPendingKyc,
 
       tenantsFilling: tenantMap.FILLING ?? 0,
       tenantsActive: tenantMap.ACTIVE ?? 0,
@@ -251,8 +270,11 @@ export class StatsRepository {
         [branchId],
       ),
       pool.query<{ status: string; count: string }>(
-        `SELECT status, COUNT(*)::text AS count FROM kyc_submissions
-         WHERE branch_id = $1 GROUP BY status`,
+        `SELECT k.status, COUNT(*)::text AS count 
+         FROM kyc_submissions k
+         JOIN users u ON u.id = k.user_id
+         WHERE k.branch_id = $1 AND u.role = 'SAVER'
+         GROUP BY k.status`,
         [branchId],
       ),
       pool.query<{ renewal_state: string; count: string }>(
@@ -334,6 +356,28 @@ export class StatsRepository {
       payoutsPendingFees: Number(feePendingRes.rows[0]?.count ?? '0'),
       payoutsPendingConfirmation: Number(payoutPendingRes.rows[0]?.count ?? '0'),
     };
+  }
+
+  async branchContributionsByTenant(branchId: string): Promise<Array<{ tenantId: string; tenantName: string; totalPence: bigint; count: number }>> {
+    const result = await pool.query<{ tenant_id: string; tenant_name: string; total: string; count: string }>(
+      `SELECT 
+         c.tenant_id,
+         COALESCE(t.name, 'Unnamed Tenant') AS tenant_name,
+         COALESCE(SUM(c.amount), 0)::text AS total,
+         COUNT(c.id)::text AS count
+       FROM contributions c
+       JOIN tenants t ON t.id = c.tenant_id
+       WHERE c.branch_id = $1
+       GROUP BY c.tenant_id, t.name
+       ORDER BY total DESC`,
+      [branchId]
+    );
+    return result.rows.map(r => ({
+      tenantId: r.tenant_id,
+      tenantName: r.tenant_name,
+      totalPence: BigInt(r.total),
+      count: Number(r.count),
+    }));
   }
 
   // ─────────────────────────────────────────────────────────────

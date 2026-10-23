@@ -1,0 +1,1 @@
+ALTER TABLE kyc_submissions ADD COLUMN IF NOT EXISTS account_name TEXT;

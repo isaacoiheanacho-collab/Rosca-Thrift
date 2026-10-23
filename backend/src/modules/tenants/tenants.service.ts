@@ -155,6 +155,12 @@ export class TenantsService {
     return Promise.all(memberships.map((m) => membershipToDto(m, userId)));
   }
 
+  async listTenantMembersForAdmin(tenantId: string): Promise<TenantMemberDto[]> {
+    const memberships = await tenantsRepository.findMembershipsByTenant(tenantId);
+    // We pass an empty string as the currentUserId since the admin isn't a member
+    return Promise.all(memberships.map((m) => membershipToDto(m, '')));
+  }
+
   async getSummaryForBranch(branchId: string): Promise<BranchSummaryDto> {
     const { tenants } = await tenantsRepository.findByBranch(branchId, {
       limit: 1000,

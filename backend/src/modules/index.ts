@@ -10,6 +10,7 @@ export {
   publicBranchesRouter,
   superAdminBranchesRouter,
   branchTrustAccountRouter,
+  branchAdminBranchesRouter,
 } from './branches/branches.routes';
 
 export {
@@ -41,6 +42,7 @@ export {
   branchAdminPoolAccountRouter,
   superAdminMaintenanceAccountRouter,
   superAdminBranchPoolAccountRouter,
+  saverPoolAccountRouter,
 } from './pool-accounts/pool-accounts.routes';
 
 export {

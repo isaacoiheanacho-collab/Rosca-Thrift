@@ -41,7 +41,15 @@ export function startNotificationsWorker(): Worker<NotificationJobData> {
     },
     {
       connection: createQueueConnection(),
-      concurrency: 5,
+      concurrency: 1,
+      // KEY FIX: Pause between polls to save Upstash commands.
+      // BullMQ will still instantly wake up when a job is added via the
+      // same Redis connection, so latency stays low — it just doesn't
+      // spam "do you have work?" when idle.
+      drainDelay: 30,            // seconds between idle polls (was ~5s default)
+      stalledInterval: 60000,    // 60s between stalled-job checks (default 30s)
+      lockDuration: 60000,       // lock jobs for 60s instead of 30s
+      lockRenewTime: 30000,      // renew locks at 30s
     },
   );
 

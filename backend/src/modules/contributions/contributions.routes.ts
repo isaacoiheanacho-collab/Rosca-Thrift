@@ -8,9 +8,9 @@
  *   POST /api/contributions/me/receipt          - upload a receipt for an intent
  *
  * Branch admin (or super admin):
- *   GET   /api/branch-admin/contributions/pending              - pending queue with receipts
- *   POST  /api/branch-admin/contributions/:intentId/confirm    - confirm
- *   POST  /api/branch-admin/contributions/:intentId/reject     - reject
+ *   GET   /api/branch-admin/contributions                   - list contributions (PENDING or CONFIRMED)
+ *   POST  /api/branch-admin/contributions/:intentId/confirm - confirm
+ *   POST  /api/branch-admin/contributions/:intentId/reject  - reject
  *   GET   /api/branch-admin/contributions/tenants/:tenantId/cycle - cycle status
  *   POST  /api/branch-admin/contributions/tenants/:tenantId/remind - send reminder
  *
@@ -22,6 +22,7 @@
 
 import { Router, type Request, type Response, type NextFunction } from 'express';
 import multer from 'multer';
+import { z } from 'zod';
 import { requireAuth, requireBranchAdmin } from '../../middleware/auth';
 import { validate } from '../../middleware/validate';
 import { AppError, NotFoundError } from '../../errors';
@@ -150,24 +151,31 @@ export const branchAdminContributionsRouter = Router();
 branchAdminContributionsRouter.use(requireBranchAdmin);
 
 branchAdminContributionsRouter.get(
-  '/pending',
-  validate({ query: ListPendingSchema }),
+  '/',
+  validate({ query: ListPendingSchema.extend({ status: z.enum(['PENDING', 'CONFIRMED']).default('PENDING') }) }),
   async (req: Request, res: Response, next: NextFunction) => {
     try {
       const q = req.query as unknown as {
         limit: number;
         offset: number;
-        tenantId?: string;
-        cycle?: number;
+        status: 'PENDING' | 'CONFIRMED';
       };
       const user = req.user!;
       const branchFilter = user.role === 'BRANCH_ADMIN' ? user.branchId : null;
 
-      const result = await contributionsService.listPendingForAdmin(branchFilter, {
-        limit: q.limit,
-        offset: q.offset,
-      });
-      res.json({ ok: true, data: { ...result, limit: q.limit, offset: q.offset } });
+      if (q.status === 'CONFIRMED') {
+        const result = await contributionsService.listConfirmedForAdmin(branchFilter, {
+          limit: q.limit,
+          offset: q.offset,
+        });
+        res.json({ ok: true, data: { ...result, limit: q.limit, offset: q.offset } });
+      } else {
+        const result = await contributionsService.listPendingForAdmin(branchFilter, {
+          limit: q.limit,
+          offset: q.offset,
+        });
+        res.json({ ok: true, data: { ...result, limit: q.limit, offset: q.offset } });
+      }
     } catch (err) {
       next(err);
     }

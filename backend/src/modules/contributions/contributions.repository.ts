@@ -245,6 +245,52 @@ export class ContributionsRepository {
     return { intents: listResult.rows, total };
   }
 
+  /**
+   * List confirmed contributions for a branch (History view).
+   */
+  async listConfirmedForBranch(
+    branchId: string | null,
+    options: { limit: number; offset: number },
+  ): Promise<{ contributions: any[]; total: number }> {
+    const conditions: string[] = [`c.branch_id IS NOT NULL`];
+    const params: unknown[] = [];
+
+    if (branchId) {
+      params.push(branchId);
+      conditions.push(`c.branch_id = $${params.length}`);
+    }
+
+    const where = `WHERE ${conditions.join(' AND ')}`;
+
+    const countResult = await pool.query<{ count: string }>(
+      `SELECT COUNT(*)::text AS count FROM contributions c ${where}`,
+      params,
+    );
+    const total = Number(countResult.rows[0]?.count ?? '0');
+
+    params.push(options.limit);
+    const limitIdx = params.length;
+    params.push(options.offset);
+    const offsetIdx = params.length;
+
+    // Join with tenants to get the readable name
+    const listResult = await pool.query(
+      `SELECT 
+         c.*,
+         u.full_name AS user_name,
+         t.name AS tenant_name
+       FROM contributions c
+       JOIN users u ON u.id = c.user_id
+       JOIN tenants t ON t.id = c.tenant_id
+       ${where}
+       ORDER BY c.confirmed_at DESC
+       LIMIT $${limitIdx} OFFSET $${offsetIdx}`,
+      params,
+    );
+
+    return { contributions: listResult.rows, total };
+  }
+
   // ---- Contributions ----
 
   async insertContribution(
@@ -378,6 +424,20 @@ export class ContributionsRepository {
     return result.rows[0] ?? null;
   }
 
+  /**
+   * Batch lookup: given a list of intent IDs, return a Set of the ones
+   * that already have a receipt. Used to avoid N+1 queries when building
+   * DTOs for lists (tenant cycle status, admin pending queue).
+   */
+  async findReceiptIntentIds(intentIds: string[]): Promise<Set<string>> {
+    if (intentIds.length === 0) return new Set();
+    const result = await pool.query<{ intent_id: string }>(
+      `SELECT DISTINCT intent_id FROM receipts WHERE intent_id = ANY($1::uuid[])`,
+      [intentIds],
+    );
+    return new Set(result.rows.map((r) => r.intent_id));
+  }
+
   async listReceiptsByTenant(tenantId: string): Promise<ReceiptRow[]> {
     const result = await pool.query<ReceiptRow>(
       `SELECT r.* FROM receipts r
@@ -398,7 +458,23 @@ export class ContributionsRepository {
     cycle: number,
   ): Promise<TenantCycleMemberRow[]> {
     const result = await pool.query<TenantCycleMemberRow>(
-      `SELECT
+      `WITH cycle_intents AS (
+         SELECT i.id, i.user_id, i.state, i.reference, i.deadline_at
+         FROM contribution_intents i
+         WHERE i.tenant_id = $1 AND i.tenure = $2 AND i.cycle = $3
+       ),
+       cycle_contribs AS (
+         SELECT DISTINCT ON (c.intent_id)
+           c.intent_id, c.id, c.amount, c.confirmed_at
+         FROM contributions c
+         WHERE c.tenant_id = $1 AND c.tenure = $2 AND c.cycle = $3
+         ORDER BY c.intent_id, c.confirmed_at ASC
+       ),
+       cycle_receipts AS (
+         SELECT DISTINCT intent_id FROM receipts
+         WHERE intent_id IN (SELECT id FROM cycle_intents)
+       )
+       SELECT
          tm.id           AS membership_id,
          tm.user_id      AS user_id,
          tm.slot_number  AS slot_number,
@@ -411,16 +487,12 @@ export class ContributionsRepository {
          c.id            AS contribution_id,
          c.amount        AS contribution_amount,
          c.confirmed_at  AS contribution_confirmed_at,
-         (r.id IS NOT NULL) AS has_receipt
+         (r.intent_id IS NOT NULL) AS has_receipt
        FROM tenant_memberships tm
          INNER JOIN users u ON u.id = tm.user_id
-         LEFT JOIN contribution_intents i
-           ON i.tenant_id = tm.tenant_id
-          AND i.user_id = tm.user_id
-          AND i.tenure = $2
-          AND i.cycle = $3
-         LEFT JOIN contributions c ON c.intent_id = i.id
-         LEFT JOIN receipts r ON r.intent_id = i.id
+         LEFT JOIN cycle_intents i ON i.user_id = tm.user_id
+         LEFT JOIN cycle_contribs c ON c.intent_id = i.id
+         LEFT JOIN cycle_receipts r ON r.intent_id = i.id
        WHERE tm.tenant_id = $1 AND tm.status != 'REMOVED'
        ORDER BY tm.slot_number ASC`,
       [tenantId, tenure, cycle],

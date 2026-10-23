@@ -23,6 +23,8 @@ export interface SuperAdminStatsDto {
     active: number;
     suspended: number;
     archived: number;
+    pending: number;          // Onboarding
+    pendingKyc: number;       // <-- NEW
   };
   tenants: {
     filling: number;
@@ -60,6 +62,12 @@ export interface SuperAdminStatsDto {
 export interface BranchAdminStatsDto {
   branchId: string;
   branchName: string;
+  contributionsByTenant: Array<{
+    tenantId: string;
+    tenantName: string;
+    totalPence: string; // Changed from bigint to string for JSON serialization
+    count: number;
+  }>;
   tenants: SuperAdminStatsDto['tenants'];
   members: SuperAdminStatsDto['members'];
   contributions: SuperAdminStatsDto['contributions'];
@@ -138,6 +146,8 @@ export class StatsService {
         active: counts.branchesActive,
         suspended: counts.branchesSuspended,
         archived: counts.branchesArchived,
+        pending: counts.branchesPending || 0,
+        pendingKyc: counts.branchesPendingKyc || 0,
       },
     };
   }
@@ -159,16 +169,26 @@ export class StatsService {
     const branch = await branchesRepository.findById(branchId);
     if (!branch) throw new NotFoundError('Branch');
 
-    const [counts, money] = await Promise.all([
+    const [counts, money, contribByTenant] = await Promise.all([
       statsRepository.branchCounts(branchId),
       statsRepository.branchMoneyThisMonth(branchId),
+      statsRepository.branchContributionsByTenant(branchId),
     ]);
 
     const shared = assembleSharedBlocks(counts, money);
 
+    // Convert BigInt to string so Express can serialize it to JSON
+    const serializedContribs = contribByTenant.map((c) => ({
+      tenantId: c.tenantId,
+      tenantName: c.tenantName,
+      totalPence: c.totalPence.toString(),
+      count: c.count,
+    }));
+
     return {
       branchId,
       branchName: branch.name,
+      contributionsByTenant: serializedContribs,
       tenants: shared.tenants,
       members: shared.members,
       contributions: shared.contributions,

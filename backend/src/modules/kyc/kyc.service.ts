@@ -12,7 +12,7 @@ import { record } from '../audit/audit.service';
 import { usersRepository } from '../users/users.repository';
 import { provisioningService } from '../tenants/provisioning.service';
 import { notificationsService } from '../notifications/notifications.service';
-import { kycRepository, type KycSubmissionRow } from './kyc.repository';
+import { kycRepository, type KycStatus, type KycSubmissionRow } from './kyc.repository';
 import type { SubmitKycInput } from './kyc.schemas';
 
 export interface RequestMeta {
@@ -25,24 +25,37 @@ export interface KycSubmissionDto {
   userId: string;
   branchId: string;
   legalName: string;
+  accountName: string | null;
   selfieUrl: string;
   bankName: string;
   accountNumber: string;
   sortCode: string;
-  status: 'PENDING' | 'APPROVED' | 'REJECTED';
+  status: 'PENDING' | 'APPROVED' | 'REJECTED' | 'NOT_SUBMITTED';
   rejectionReason: string | null;
   reviewedAt: string | null;
   createdAt: string;
+  // NEW
+  tenantId: string | null;
+  tenantName: string | null;
 }
 
 async function toDto(row: KycSubmissionRow): Promise<KycSubmissionDto> {
-  const selfieUrl = await getPresignedDownloadUrl(row.selfie_object_key, 300);
+  let selfieUrl = '';
+  // Guard: Only generate presigned URL if there is actually a key
+  if (row.selfie_object_key) {
+    try {
+      selfieUrl = await getPresignedDownloadUrl(row.selfie_object_key, 300);
+    } catch (_) {
+      selfieUrl = ''; // Fallback if S3 fails
+    }
+  }
 
   return {
     id: row.id,
     userId: row.user_id,
     branchId: row.branch_id,
     legalName: row.legal_name,
+    accountName: row.account_name ?? null,
     selfieUrl,
     bankName: row.bank_name,
     accountNumber: row.account_number,
@@ -51,6 +64,8 @@ async function toDto(row: KycSubmissionRow): Promise<KycSubmissionDto> {
     rejectionReason: row.rejection_reason,
     reviewedAt: row.reviewed_at?.toISOString() ?? null,
     createdAt: row.created_at.toISOString(),
+    tenantId: row.tenant_id ?? null,
+    tenantName: row.tenant_name ?? 'Unassigned',
   };
 }
 
@@ -92,6 +107,7 @@ export class KycService {
       userId,
       branchId: user.branch_id,
       legalName: input.legalName,
+      accountName: input.legalName, // Force it to match legal name exactly
       selfieObjectKey: objectKey,
       bankName: input.bankName,
       accountNumber: input.accountNumber,
@@ -120,8 +136,9 @@ export class KycService {
   async list(options: {
     limit: number;
     offset: number;
-    status?: 'PENDING' | 'APPROVED' | 'REJECTED';
+    status?: KycStatus;
     branchId?: string;
+    tenantId?: string;
   }): Promise<{ submissions: KycSubmissionDto[]; total: number }> {
     const { submissions, total } = await kycRepository.list(options);
     const dtos = await Promise.all(submissions.map(toDto));

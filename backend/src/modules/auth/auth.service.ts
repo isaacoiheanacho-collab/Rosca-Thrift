@@ -81,7 +81,6 @@ export class AuthService {
   // ─────────────────────────────────────────────────────────────
 
   async register(input: RegisterInput, meta: RequestMeta): Promise<{ userId: string }> {
-    // Resolve branch
     let branchId: string | null = null;
     if (input.branchSlug) {
       const branch = await branchesRepository.findBySlug(input.branchSlug);
@@ -102,13 +101,11 @@ export class AuthService {
       branchId = branch.id;
     }
 
-    // Existing phone?
     const existing = await authRepository.findUserByPhone(input.phone);
     if (existing) {
       throw new ConflictError('Phone number is already registered', 'AUTH_PHONE_TAKEN');
     }
 
-    // Validate consent versions
     if (input.consents.terms.version !== CONSENT_VERSIONS.TERMS) {
       throw new AppError({
         code: 'CONSENT_VERSION_MISMATCH',
@@ -128,8 +125,6 @@ export class AuthService {
 
     const passwordHash = await hashPassword(input.password);
 
-    // Create user + consents inside one transaction. If consent recording
-    // fails for any reason, the user is not created.
     const user = await withTransaction(async (tx) => {
       const created = await authRepository.insertUser(
         {
@@ -142,17 +137,10 @@ export class AuthService {
         },
         tx,
       );
-
-      // NOTE: consent rows are inserted with the outer pool, not this tx.
-      // For now this is acceptable — a rare edge case (consent insert fails
-      // after user insert succeeds) is logged and recovered by admin tooling.
-      // A future change will make the consent repository accept a tx client.
       void tx;
-
       return created;
     });
 
-    // Record consents (outside the tx for now)
     await consentService.recordAcceptance({
       userId: user.id,
       consentType: CONSENT_TYPES.TERMS,
@@ -170,7 +158,6 @@ export class AuthService {
       userAgent: meta.userAgent ?? null,
     });
 
-    // Send OTP for phone verification
     const send = await createAndSendOtp(user.phone, 'signup', meta.ipAddress);
     if (!send.ok) {
       logger.warn(
@@ -198,6 +185,55 @@ export class AuthService {
   }
 
   // ─────────────────────────────────────────────────────────────
+  // Register Super Admin
+  // ─────────────────────────────────────────────────────────────
+
+  async registerSuperAdmin(
+    input: { fullName: string; phone: string; password: string },
+    meta: RequestMeta,
+  ): Promise<{ userId: string }> {
+    const existing = await authRepository.findUserByPhone(input.phone);
+    if (existing) {
+      throw new ConflictError('Phone number is already registered', 'AUTH_PHONE_TAKEN');
+    }
+
+    const passwordHash = await hashPassword(input.password);
+
+    const user = await withTransaction(async (tx) => {
+      return authRepository.insertUser(
+        {
+          phone: input.phone,
+          email: null,
+          passwordHash,
+          fullName: input.fullName,
+          role: 'SUPER_ADMIN',
+          branchId: null, // Super admins have no branch
+        },
+        tx,
+      );
+    });
+
+    const send = await createAndSendOtp(user.phone, 'signup', meta.ipAddress);
+    if (!send.ok) {
+      logger.warn(
+        { userId: user.id, error: send.error },
+        'OTP send failed at super admin register',
+      );
+    }
+
+    await record({
+      actorId: user.id,
+      action: 'SUPER_ADMIN_REGISTERED',
+      entityType: 'user',
+      entityId: user.id,
+      ipAddress: meta.ipAddress,
+      userAgent: meta.userAgent,
+    });
+
+    return { userId: user.id };
+  }
+
+  // ─────────────────────────────────────────────────────────────
   // Verify phone
   // ─────────────────────────────────────────────────────────────
 
@@ -218,7 +254,6 @@ export class AuthService {
 
     const tokens = await this.issueTokens(updated, meta);
 
-    // Provision into a tenant (idempotent)
     if (updated.branch_id) {
       try {
         await provisioningService.provisionUserToTenant(updated.id, updated.branch_id);
@@ -287,6 +322,26 @@ export class AuthService {
       });
     }
 
+    // ── NEW: Branch Scope Enforcement ──────────────────────────
+    if (input.branchSlug) {
+      const branch = await branchesRepository.findBySlug(input.branchSlug);
+      if (!branch) {
+        throw new AppError({
+          code: 'AUTH_BRANCH_NOT_FOUND',
+          httpStatus: 400,
+          message: 'Branch not found',
+        });
+      }
+      if (user.branch_id !== branch.id) {
+        throw new AppError({
+          code: 'AUTH_WRONG_BRANCH',
+          httpStatus: 403,
+          message: 'You are not a member of this branch.',
+        });
+      }
+    }
+    // ───────────────────────────────────────────────────────────
+
     const tokens = await this.issueTokens(user, meta);
 
     await record({
@@ -328,7 +383,6 @@ export class AuthService {
     }
 
     if (row.revoked_at) {
-      // Possible reuse attack — revoke everything for this user
       await authRepository.revokeAllUserTokens(payload.sub);
       throw new AppError({
         code: 'AUTH_TOKEN_REUSED',
@@ -348,12 +402,9 @@ export class AuthService {
     const user = await authRepository.findUserById(payload.sub);
     if (!user) throw new NotFoundError('User');
 
-    // Rotate: revoke old, insert new — inside a transaction so both happen
-    // or neither does.
     const tokens = await withTransaction(async (tx) => {
       const newTokens = await this.signTokens(user);
 
-      // Insert the new refresh token row first so we know its id
       const newRow = await authRepository.insertRefreshToken(
         {
           userId: user.id,
@@ -365,7 +416,6 @@ export class AuthService {
         tx,
       );
 
-      // Revoke the old row, linking it to the new one
       await authRepository.revokeRefreshToken(row.id, newRow.id, tx);
 
       return newTokens;
@@ -406,7 +456,7 @@ export class AuthService {
     meta: RequestMeta,
   ): Promise<void> {
     const user = await authRepository.findUserByPhone(input.phone);
-    if (!user) return; // Silent — don't leak account existence
+    if (!user) return;
 
     await createAndSendOtp(input.phone, 'reset', meta.ipAddress);
   }
@@ -430,7 +480,6 @@ export class AuthService {
     const newHash = await hashPassword(input.newPassword);
     await authRepository.updatePassword(user.id, newHash);
 
-    // Revoke all sessions on password reset
     await authRepository.revokeAllUserTokens(user.id);
 
     await record({
@@ -447,14 +496,12 @@ export class AuthService {
   // Internals
   // ─────────────────────────────────────────────────────────────
 
-  /** Sign tokens without persisting them. Used by both login and refresh. */
   private async signTokens(user: UserRow): Promise<AuthResult['tokens']> {
     const accessToken = signAccessToken(user.id, user.role, user.branch_id);
     const refreshToken = signRefreshToken(user.id, user.role, user.branch_id);
     return { accessToken, refreshToken };
   }
 
-  /** Sign tokens and persist the refresh token row. Used by login + verify. */
   private async issueTokens(user: UserRow, meta: RequestMeta): Promise<AuthResult['tokens']> {
     return withTransaction(async (tx) => {
       const tokens = await this.signTokens(user);

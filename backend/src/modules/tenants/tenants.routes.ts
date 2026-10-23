@@ -9,9 +9,11 @@
  *   GET   /api/branch-admin/tenants/summary            - counts + list
  *   GET   /api/branch-admin/tenants                    - list tenants
  *   GET   /api/branch-admin/tenants/:id                - view one
+ *   GET   /api/branch-admin/tenants/:id/members        - view members of a tenant
  *   PATCH /api/branch-admin/tenants/:id/status         - change status
  *
  * Super Admin:
+ *   GET   /api/super-admin/tenants/all                 - list all tenants across branches
  *   GET   /api/super-admin/tenants/by-branch/:branchId - list tenants in a branch
  *   GET   /api/super-admin/tenants/:id                 - view one
  *   PATCH /api/super-admin/tenants/:id/status          - change status
@@ -23,6 +25,7 @@ import { z } from 'zod';
 import { requireAuth, requireSuperAdmin, requireBranchAdmin } from '../../middleware/auth';
 import { validate } from '../../middleware/validate';
 import { AppError, NotFoundError } from '../../errors';
+import { pool } from '../../db';
 import { tenantsService, type RequestMeta } from './tenants.service';
 import { provisioningService } from './provisioning.service';
 import { usersRepository } from '../users/users.repository';
@@ -122,6 +125,25 @@ branchAdminTenantsRouter.get('/:id', async (req: Request, res: Response, next: N
   }
 });
 
+branchAdminTenantsRouter.get(
+  '/:id/members',
+  async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const tenant = await tenantsService.getById(String(req.params.id));
+      
+      // Security check: Branch Admin can only view their own branch's tenants
+      if (req.user!.role === 'BRANCH_ADMIN' && tenant.branchId !== req.user!.branchId) {
+        throw new AppError({ code: 'AUTH_BRANCH_SCOPE', httpStatus: 403, message: 'Not permitted' });
+      }
+      
+      const members = await tenantsService.listTenantMembersForAdmin(String(req.params.id));
+      res.json({ ok: true, data: members });
+    } catch (err) {
+      next(err);
+    }
+  },
+);
+
 branchAdminTenantsRouter.patch(
   '/:id/status',
   validate({ body: UpdateTenantStatusSchema }),
@@ -153,6 +175,29 @@ branchAdminTenantsRouter.patch(
 export const superAdminTenantsRouter = Router();
 
 superAdminTenantsRouter.use(requireSuperAdmin);
+
+// ─────────────────────────────────────────────────────────────
+// Super Admin: All Tenants (must be before /:id)
+// ─────────────────────────────────────────────────────────────
+
+superAdminTenantsRouter.get(
+  '/all',
+  async (_req: Request, res: Response, next: NextFunction) => {
+    try {
+      const result = await pool.query(`
+        SELECT t.*, b.name as branch_name, u.full_name as admin_name,
+               (SELECT COUNT(*) FROM tenant_memberships tm WHERE tm.tenant_id = t.id AND tm.status != 'REMOVED') as member_count
+        FROM tenants t
+        JOIN branches b ON b.id = t.branch_id
+        LEFT JOIN users u ON u.id = b.created_by
+        ORDER BY t.created_at DESC
+      `);
+      res.json({ ok: true, data: result.rows });
+    } catch (err) {
+      next(err);
+    }
+  }
+);
 
 superAdminTenantsRouter.get(
   '/by-branch/:branchId',

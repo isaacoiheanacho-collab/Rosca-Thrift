@@ -72,6 +72,7 @@ const EnvSchema = z.object({
 
   // Super-admin bootstrap
   SUPER_ADMIN_PHONE: z.string().regex(/^\+[1-9]\d{6,14}$/).optional(),
+  SUPER_ADMIN_REGISTRATION_SECRET: z.string().min(1),
 
   // Dev override (optional). In dev, if set, this code works alongside real OTP.
   DEV_OTP_OVERRIDE: z.string().optional(),

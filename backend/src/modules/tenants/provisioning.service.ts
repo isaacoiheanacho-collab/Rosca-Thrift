@@ -18,10 +18,11 @@
  * Idempotent: safe to call multiple times.
  */
 
-import { withTransaction } from '../../db';
+import { withTransaction, pool } from '../../db';
 import { env } from '../../config/env';
 import { logger } from '../../logger';
 import { record } from '../audit/audit.service';
+import { usersRepository } from '../users/users.repository';
 import { tenantsRepository, type TenantRow } from './tenants.repository';
 import { rotationService } from '../payouts/rotation.service';
 import { tenureRenewalService } from './tenure-renewal.service';
@@ -43,7 +44,24 @@ function pickRandomFreeSlot(used: number[]): number | null {
 
 export class ProvisioningService {
   async provisionUserToTenant(userId: string, branchId: string): Promise<ProvisionResult> {
-    // 1. Already provisioned?
+    // 1. Check if user is an admin. Admins do not get put into savings circles.
+    const user = await usersRepository.findById(userId);
+    if (!user || user.role !== 'SAVER') {
+      logger.debug(
+        { userId, role: user?.role },
+        'Skipping tenant provisioning for non-saver'
+      );
+
+      return {
+        tenantId: '',
+        slotNumber: 0,
+        tenantActivated: false,
+        createdNewTenant: false,
+        alreadyProvisioned: true,
+      };
+    }
+
+    // 2. Already provisioned?
     const existing = await tenantsRepository.findMembershipByUser(userId);
     if (existing) {
       logger.debug({ userId, tenantId: existing.tenant_id }, 'Already provisioned');
@@ -56,14 +74,14 @@ export class ProvisioningService {
       };
     }
 
-    // 2. Priority: renewing tenant waiting for a replacement?
+    // 3. Priority: renewing tenant waiting for a replacement?
     const replacing = await tenantsRepository.findReplacingByBranch(branchId);
     if (replacing) {
       const result = await tenureRenewalService.tryAssignReplacement(branchId, userId);
       if (result) {
         logger.info(
           { userId, tenantId: result.tenantId, slotNumber: result.slotNumber },
-          'User provisioned as renewal replacement',
+          'User provisioned as renewal replacement'
         );
         return {
           tenantId: result.tenantId,
@@ -78,29 +96,41 @@ export class ProvisioningService {
       // (e.g. no unfilled slots left).
     }
 
-    // 3. Find or create FILLING tenant
+    // 4. Find or create FILLING tenant
     let tenant: TenantRow | null = await tenantsRepository.findOpenByBranch(branchId);
     let createdNewTenant = false;
 
     if (!tenant) {
-      tenant = await tenantsRepository.insert(branchId, null);
+      // Count existing tenants to generate a sequential name (e.g., Tenant 01)
+      const countRes = await pool.query<{ count: string }>(
+        `SELECT COUNT(*)::text AS count FROM tenants WHERE branch_id = $1`,
+        [branchId]
+      );
+      const tenantCount = Number(countRes.rows[0]?.count ?? '0');
+      
+      // Pad with zero: Tenant 01, Tenant 02
+      const tenantName = `Tenant ${String(tenantCount + 1).padStart(2, '0')}`;
+
+      tenant = await tenantsRepository.insert(branchId, tenantName);
       createdNewTenant = true;
+
       await record({
         actorId: null,
         action: 'TENANT_CREATED',
         entityType: 'tenant',
         entityId: tenant.id,
-        metadata: { branchId, reason: 'auto-provisioning' },
+        metadata: { branchId, reason: 'auto-provisioning', tenantName },
       });
-      logger.info({ tenantId: tenant.id, branchId }, 'Tenant auto-created');
+
+      logger.info({ tenantId: tenant.id, branchId, tenantName }, 'Tenant auto-created');
     }
 
-    // 4. Assign slot inside a transaction so we never double-book
+    // 5. Assign slot inside a transaction so we never double-book
     const result = await withTransaction(async (tx) => {
       const usedSlotsRes = await tx.query<{ slot_number: number }>(
         `SELECT slot_number FROM tenant_memberships
          WHERE tenant_id = $1 AND status != 'REMOVED'`,
-        [tenant!.id],
+        [tenant!.id]
       );
       const used = usedSlotsRes.rows.map((r) => r.slot_number);
 
@@ -113,14 +143,14 @@ export class ProvisioningService {
         `INSERT INTO tenant_memberships (tenant_id, user_id, slot_number)
          VALUES ($1, $2, $3)
          RETURNING id, slot_number`,
-        [tenant!.id, userId, slot],
+        [tenant!.id, userId, slot]
       );
       const membership = membershipRes.rows[0]!;
 
       const countRes = await tx.query<{ count: string }>(
         `SELECT COUNT(*)::text AS count FROM tenant_memberships
          WHERE tenant_id = $1 AND status != 'REMOVED'`,
-        [tenant!.id],
+        [tenant!.id]
       );
       const memberCount = Number(countRes.rows[0]?.count ?? '0');
 
@@ -142,7 +172,7 @@ export class ProvisioningService {
                current_tenure_tvc_bps = $3,
                tenure_started_at = NOW()
            WHERE id = $1 AND status = 'FILLING'`,
-          [tenant!.id, env.PLATFORM_FEE_BPS, env.TVC_ANNUAL_BPS],
+          [tenant!.id, env.PLATFORM_FEE_BPS, env.TVC_ANNUAL_BPS]
         );
         activated = true;
       }
@@ -155,7 +185,7 @@ export class ProvisioningService {
           entityId: membership.id,
           metadata: { tenantId: tenant!.id, userId, slotNumber: slot },
         },
-        tx,
+        tx
       );
 
       if (activated) {
@@ -165,9 +195,13 @@ export class ProvisioningService {
             action: 'TENANT_ACTIVATED',
             entityType: 'tenant',
             entityId: tenant!.id,
-            metadata: { memberCount, feeBps: env.PLATFORM_FEE_BPS, tvcBps: env.TVC_ANNUAL_BPS },
+            metadata: {
+              memberCount,
+              feeBps: env.PLATFORM_FEE_BPS,
+              tvcBps: env.TVC_ANNUAL_BPS,
+            },
           },
-          tx,
+          tx
         );
       }
 
@@ -183,17 +217,17 @@ export class ProvisioningService {
         activated: result.activated,
         createdNewTenant,
       },
-      'User provisioned to tenant',
+      'User provisioned to tenant'
     );
 
-    // 5. If activated, generate cycle-1 payout + fee intents (idempotent).
+    // 6. If activated, generate cycle-1 payout + fee intents (idempotent).
     if (result.activated) {
       try {
         await rotationService.ensureIntentsForCycle(tenant.id, 1, 1);
       } catch (err) {
         logger.error(
           { err, tenantId: tenant.id },
-          'Failed to generate cycle-1 payout intents - can be retried manually',
+          'Failed to generate cycle-1 payout intents - can be retried manually'
         );
       }
     }

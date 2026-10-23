@@ -39,6 +39,7 @@ export interface ContributionIntentDto {
   deadlineAt: string;
   state: 'PENDING' | 'CONFIRMED' | 'LATE' | 'EXEMPT';
   isOverdue: boolean;
+  hasReceipt: boolean;
   targetAccount: {
     accountHolderName: string;
     bankName: string;
@@ -135,11 +136,18 @@ export interface TenantReceiptDto {
   createdAt: string;
 }
 
-function intentToDto(
+async function intentToDto(
   row: ContributionIntentRow,
   targetAccount: ContributionIntentDto['targetAccount'],
-): ContributionIntentDto {
+  receiptIntentIds?: Set<string>,
+): Promise<ContributionIntentDto> {
   const now = Date.now();
+
+  // If caller passed a pre-fetched set, use it. Otherwise fall back
+  // to a single lookup (used by getOrCreateCurrentIntent).
+  const hasReceipt = receiptIntentIds
+    ? receiptIntentIds.has(row.id)
+    : !!(await contributionsRepository.findReceiptByIntentId(row.id));
 
   return {
     id: row.id,
@@ -153,6 +161,7 @@ function intentToDto(
     deadlineAt: row.deadline_at.toISOString(),
     state: row.state,
     isOverdue: row.deadline_at.getTime() < now && row.state === 'PENDING',
+    hasReceipt,
     targetAccount,
     createdAt: row.created_at.toISOString(),
   };
@@ -199,6 +208,26 @@ export class ContributionsService {
     userId: string,
     meta: RequestMeta,
   ): Promise<ContributionIntentDto> {
+    // ── NEW: KYC Check ──────────────────────────────────────────
+    const kycResult = await pool.query<{ status: string }>(
+      `SELECT status FROM kyc_submissions 
+       WHERE user_id = $1 
+       ORDER BY created_at DESC 
+       LIMIT 1`,
+      [userId]
+    );
+    
+    const kycStatus = kycResult.rows[0]?.status;
+    
+    if (kycStatus !== 'APPROVED') {
+      throw new AppError({
+        code: 'CONTRIB_KYC_REQUIRED',
+        httpStatus: 403,
+        message: 'Your identity must be verified by your Branch Admin before you can contribute.',
+      });
+    }
+    // ─────────────────────────────────────────────────────────────
+
     // Lazy cycle-advancement trigger: if this user's tenant has a completed
     // cycle waiting to advance, advance it before doing anything else.
     try {
@@ -291,7 +320,7 @@ export class ContributionsService {
     }
 
     const poolAccount = await this.getBranchPoolAccount(tenant.branch_id);
-    return intentToDto(intent, poolAccount);
+    return await intentToDto(intent, poolAccount);
   }
 
   private async getBranchPoolAccount(
@@ -317,7 +346,10 @@ export class ContributionsService {
 
   async listMyIntents(userId: string): Promise<ContributionIntentDto[]> {
     const rows = await contributionsRepository.listIntentsByUser(userId);
-    return Promise.all(rows.map((r) => intentToDto(r, null)));
+    const receiptIds = await contributionsRepository.findReceiptIntentIds(
+      rows.map((r) => r.id),
+    );
+    return Promise.all(rows.map((r) => intentToDto(r, null, receiptIds)));
   }
 
   async listMyContributions(userId: string): Promise<ContributionDto[]> {
@@ -335,8 +367,12 @@ export class ContributionsService {
       contributionsRepository.listContributionsByTenantCycle(tenantId, tenure, cycle),
     ]);
 
+    const receiptIds = await contributionsRepository.findReceiptIntentIds(
+      intents.map((i) => i.id),
+    );
+
     return {
-      intents: intents.map((i) => intentToDto(i, null)),
+      intents: await Promise.all(intents.map((i) => intentToDto(i, null, receiptIds))),
       contributions: contributions.map(contributionToDto),
     };
   }
@@ -350,10 +386,20 @@ export class ContributionsService {
       options,
     );
 
+    // Pre-fetch the receipt set so intentToDto doesn't do a lookup per row
+    const receiptIds = await contributionsRepository.findReceiptIntentIds(
+      intents.map((i) => i.id),
+    );
+
     const dtos: PendingIntentDto[] = [];
     for (const i of intents) {
-      const dto = intentToDto(i, null);
-      const receipt = await contributionsRepository.findReceiptByIntentId(i.id);
+      const dto = await intentToDto(i, null, receiptIds);
+
+      // We still need the full receipt row for the URL etc. But only
+      // for intents that actually have a receipt.
+      const receipt = receiptIds.has(i.id)
+        ? await contributionsRepository.findReceiptByIntentId(i.id)
+        : null;
 
       if (receipt) {
         const url = await getPresignedDownloadUrl(receipt.object_key, 300);
@@ -377,6 +423,26 @@ export class ContributionsService {
     }
 
     return { intents: dtos, total };
+  }
+
+  async listConfirmedForAdmin(
+    branchId: string | null,
+    options: { limit: number; offset: number },
+  ): Promise<{ contributions: any[]; total: number }> {
+    const { contributions, total } = await contributionsRepository.listConfirmedForBranch(branchId, options);
+    
+    // Map to a clean DTO for the frontend
+    const dtos = contributions.map(c => ({
+      id: c.id,
+      reference: c.reference,
+      tenantName: c.tenant_name,
+      userName: c.user_name,
+      cycle: c.cycle,
+      amountPence: c.amount.toString(),
+      confirmedAt: c.confirmed_at.toISOString(),
+    }));
+
+    return { contributions: dtos, total };
   }
 
   async listTenantCycleMembers(
@@ -607,6 +673,15 @@ export class ContributionsService {
 
     if (intent.state === 'CONFIRMED') {
       throw new ConflictError('Intent already confirmed', 'CONTRIB_ALREADY_CONFIRMED');
+    }
+
+    // NEW: Block duplicate receipt uploads
+    const existingReceipt = await contributionsRepository.findReceiptByIntentId(intent.id);
+    if (existingReceipt) {
+      throw new ConflictError(
+        'You have already uploaded a receipt for this cycle. Awaiting branch admin review.',
+        'RECEIPT_ALREADY_UPLOADED',
+      );
     }
 
     const parsed = parseReference(input.claimedReference);
