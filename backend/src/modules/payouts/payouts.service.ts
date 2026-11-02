@@ -21,7 +21,7 @@
 import { logger } from '../../logger';
 import { withTransaction, pool } from '../../db';
 import { AppError, ConflictError, NotFoundError } from '../../errors';
-import { uploadObject } from '../../utils/s3';
+import { uploadObject, getPresignedDownloadUrl } from '../../utils/s3';
 import { record } from '../audit/audit.service';
 import { ledgerService } from '../ledger/ledger.service';
 import { usersRepository } from '../users/users.repository';
@@ -33,6 +33,7 @@ import {
   type PayoutIntentRow,
   type PlatformFeeIntentRow,
   type PayoutIntentState,
+  type FeeIntentState,
 } from './payouts.repository';
 import { payoutFailuresRepository } from './payout-failures.repository';
 
@@ -41,9 +42,18 @@ export interface RequestMeta {
   userAgent?: string;
 }
 
+export interface PayoutFeeIntentDto {
+  id: string;
+  amountPence: string;
+  amountGbp: string;
+  reference: string;
+  state: string;
+}
+
 export interface PayoutIntentDto {
   id: string;
   tenantId: string;
+  tenantName: string; // NEW
   branchId: string;
   tenure: number;
   cycle: number;
@@ -64,10 +74,12 @@ export interface PayoutIntentDto {
   feeConfirmedAt: string | null;
   payoutConfirmedAt: string | null;
   feeIntentId: string | null;
+  feeIntent: PayoutFeeIntentDto | null;
   failedAt: string | null;
   failureReason: string | null;
   retryOfPayoutId: string | null;
   retryCount: number;
+  dueDate: string; // NEW
   createdAt: string;
 }
 
@@ -87,17 +99,76 @@ export interface PlatformFeeIntentDto {
   createdAt: string;
 }
 
+/**
+ * Enriched fee intent used by the Super Admin "Payout Approvals" tab.
+ * Unlike PlatformFeeIntentDto, this carries the branch / admin / tenant
+ * display fields plus a short-lived presigned download URL for the
+ * uploaded receipt image, and it also surfaces the payout reference
+ * (which is the human-readable ID the Super Admin checks against the
+ * bank transfer description) plus the fee's own reference.
+ *
+ * IMPORTANT: `state` is the **fee intent** state (PENDING /
+ * RECEIPT_UPLOADED / CONFIRMED), NOT the payout intent state. The two
+ * live on different tables and are advanced by different actors. The
+ * Super Admin approvals UI relies on this being the fee state so it can
+ * decide whether to show "Confirm Fee" or "Confirmed".
+ */
+export interface PendingFeeIntentWithContextDto {
+  id: string;
+  tenantId: string;
+  tenantName: string;
+  branchId: string;
+  branchName: string;
+  adminName: string;
+  cycle: number;
+  tenure: number;
+  amountPence: string;
+  amountGbp: string;
+  reference: string; // payout reference (e.g. PAY-...)
+  feeReference: string; // fee reference (e.g. FEE-...)
+  receiptUrl: string | null;
+  state: 'PENDING' | 'RECEIPT_UPLOADED' | 'CONFIRMED';
+}
+
 export interface FailedPayoutDto extends PayoutIntentDto {
-  tenantName: string | null;
   branchName: string;
   failureReasonSafe: string;
 }
 
 async function payoutToDto(row: PayoutIntentRow): Promise<PayoutIntentDto> {
   const recipient = await usersRepository.findById(row.recipient_user_id);
+
+  // Fetch the Tenant name and the cycle payout due date so consumers can
+  // display them without a second call.
+  const tenantRes = await pool.query<{ name: string; cycle_payout_at: Date | null }>(
+    'SELECT name, cycle_payout_at FROM tenants WHERE id = $1',
+    [row.tenant_id],
+  );
+  const tenantName = tenantRes.rows[0]?.name || 'Unknown Tenant';
+  const dueDate =
+    tenantRes.rows[0]?.cycle_payout_at?.toISOString() ?? row.created_at.toISOString();
+
+  // Fetch the associated fee intent so consumers (e.g. the saver dashboard
+  // and the branch payouts table) can render a "Pay Fee" affordance and
+  // fee status without a second call.
+  let feeIntent: PayoutFeeIntentDto | null = null;
+  if (row.fee_intent_id) {
+    const feeRow = await payoutsRepository.findFeeIntentById(row.fee_intent_id);
+    if (feeRow) {
+      feeIntent = {
+        id: feeRow.id,
+        amountPence: feeRow.amount.toString(),
+        amountGbp: (Number(feeRow.amount) / 100).toFixed(2),
+        reference: feeRow.reference,
+        state: feeRow.state,
+      };
+    }
+  }
+
   return {
     id: row.id,
     tenantId: row.tenant_id,
+    tenantName,
     branchId: row.branch_id,
     tenure: row.tenure,
     cycle: row.cycle,
@@ -118,10 +189,12 @@ async function payoutToDto(row: PayoutIntentRow): Promise<PayoutIntentDto> {
     feeConfirmedAt: row.fee_confirmed_at?.toISOString() ?? null,
     payoutConfirmedAt: row.payout_confirmed_at?.toISOString() ?? null,
     feeIntentId: row.fee_intent_id,
+    feeIntent,
     failedAt: row.failed_at?.toISOString() ?? null,
     failureReason: row.failure_reason,
     retryOfPayoutId: row.retry_of_payout_id,
     retryCount: row.retry_count,
+    dueDate,
     createdAt: row.created_at.toISOString(),
   };
 }
@@ -184,12 +257,159 @@ export class PayoutsService {
     return Promise.all(rows.map(payoutToDto));
   }
 
+  /**
+   * Super Admin "Payout Approvals" queue.
+   *
+   * The raw repository returns platform_fee_intents rows only. For the
+   * approvals UI we need to enrich each row with the branch name, the
+   * branch admin's name, the tenant name, the payout reference (which is
+   * the human-readable ID the Super Admin reconciles against the bank
+   * transfer) and a short-lived presigned download URL for the uploaded
+   * receipt so the Super Admin can eyeball the transfer image before
+   * confirming.
+   */
   async listPendingFeeIntents(options: { limit: number; offset: number }): Promise<{
-    intents: PlatformFeeIntentDto[];
+    intents: PendingFeeIntentWithContextDto[];
     total: number;
   }> {
     const { intents, total } = await payoutsRepository.listPendingFeeIntents(options);
-    return { intents: intents.map(feeToDto), total };
+
+    const dtos: PendingFeeIntentWithContextDto[] = [];
+
+    for (const fee of intents) {
+      dtos.push(await this.enrichFeeIntent(fee));
+    }
+
+    return { intents: dtos, total };
+  }
+
+  /**
+   * State-aware fee-approvals listing used by the Super Admin Payout
+   * Approvals tab. Supports three filters:
+   *   - 'PENDING'    → fees that have a receipt awaiting verification
+   *   - 'CONFIRMED'  → fees that have been confirmed (history)
+   *   - 'ALL'        → every fee intent regardless of state
+   *
+   * Same enrichment as listPendingFeeIntents; delegates the per-row
+   * enrichment to a shared helper so the two methods never drift.
+   */
+  async listFeeIntentsForReview(
+    stateFilter: 'PENDING' | 'CONFIRMED' | 'ALL',
+    options: { limit: number; offset: number },
+  ): Promise<{ intents: PendingFeeIntentWithContextDto[]; total: number }> {
+    let states: FeeIntentState[];
+
+    if (stateFilter === 'PENDING') {
+      states = ['RECEIPT_UPLOADED'];
+    } else if (stateFilter === 'CONFIRMED') {
+      states = ['CONFIRMED'];
+    } else {
+      states = ['PENDING', 'RECEIPT_UPLOADED', 'CONFIRMED'];
+    }
+
+    const { intents, total } = await payoutsRepository.listFeeIntentsByState(states, options);
+
+    const dtos: PendingFeeIntentWithContextDto[] = [];
+    for (const fee of intents) {
+      dtos.push(await this.enrichFeeIntent(fee));
+    }
+
+    return { intents: dtos, total };
+  }
+
+  /**
+   * Shared enrichment helper used by both listPendingFeeIntents and
+   * listFeeIntentsForReview. Resolves branch/admin/tenant display names,
+   * the associated payout reference, and a 5-minute presigned URL for
+   * the uploaded fee receipt. Every DB/URL lookup is defensive — a
+   * missing join row or S3 hiccup returns a safe fallback rather than
+   * throwing and breaking the whole queue.
+   *
+   * NOTE ON `state`: the value placed on the DTO is `fee.state` — the
+   * state of the **platform_fee_intent** row. This is intentionally NOT
+   * the payout intent state. The Super Admin Fee Approvals tab uses this
+   * to decide whether the row is actionable ("Confirm Fee" button) or
+   * historical ("Confirmed" badge). Do not change this to read from the
+   * payout intent — the two states advance independently and would
+   * silently break the history view.
+   */
+  private async enrichFeeIntent(
+    fee: PlatformFeeIntentRow,
+  ): Promise<PendingFeeIntentWithContextDto> {
+    // Branch display name.
+    const branchRes = await pool.query<{ name: string }>(
+      'SELECT name FROM branches WHERE id = $1',
+      [fee.branch_id],
+    );
+    const branchName = branchRes.rows[0]?.name || 'Unknown Branch';
+
+    // Branch admin's display name.
+    const adminRes = await pool.query<{ full_name: string }>(
+      `SELECT full_name FROM users WHERE branch_id = $1 AND role = 'BRANCH_ADMIN' LIMIT 1`,
+      [fee.branch_id],
+    );
+    const adminName = adminRes.rows[0]?.full_name || 'Unknown Admin';
+
+    // Tenant display name.
+    const tenantRes = await pool.query<{ name: string }>(
+      'SELECT name FROM tenants WHERE id = $1',
+      [fee.tenant_id],
+    );
+    const tenantName = tenantRes.rows[0]?.name || 'Unknown Tenant';
+
+    // Payout reference — the human-readable ID the Super Admin uses
+    // when they see the bank transfer narrative.
+    const payoutRes = await pool.query<{ reference: string }>(
+      `SELECT reference FROM payout_intents WHERE fee_intent_id = $1 LIMIT 1`,
+      [fee.id],
+    );
+    const payoutReference = payoutRes.rows[0]?.reference || '—';
+
+    // Receipt object key — the fee receipt was attached to the payout
+    // intent row that this fee intent belongs to. There should be at
+    // most one PLATFORM_FEE receipt per cycle.
+    const receiptRes = await pool.query<{ object_key: string }>(
+      `SELECT object_key FROM receipts
+       WHERE purpose = 'PLATFORM_FEE'
+         AND payout_id IN (
+           SELECT id FROM payout_intents WHERE fee_intent_id = $1
+         )
+       ORDER BY created_at DESC
+       LIMIT 1`,
+      [fee.id],
+    );
+
+    let receiptUrl: string | null = null;
+    if (receiptRes.rows[0]?.object_key) {
+      try {
+        receiptUrl = await getPresignedDownloadUrl(receiptRes.rows[0].object_key, 300);
+      } catch (err) {
+        logger.error(
+          { err, feeIntentId: fee.id, objectKey: receiptRes.rows[0].object_key },
+          'Failed to presign receipt URL',
+        );
+      }
+    }
+
+    return {
+      id: fee.id,
+      tenantId: fee.tenant_id,
+      tenantName,
+      branchId: fee.branch_id,
+      branchName,
+      adminName,
+      cycle: fee.cycle,
+      tenure: fee.tenure,
+      reference: payoutReference,
+      amountPence: fee.amount.toString(),
+      amountGbp: (Number(fee.amount) / 100).toFixed(2),
+      feeReference: fee.reference,
+      receiptUrl,
+      // This MUST be the fee intent state (PENDING | RECEIPT_UPLOADED | CONFIRMED).
+      // Do NOT substitute the payout intent state here — the two are different
+      // tables and advance independently.
+      state: fee.state,
+    };
   }
 
   async listFailedPayouts(options: {
@@ -202,15 +422,10 @@ export class PayoutsService {
     const dtos: FailedPayoutDto[] = [];
     for (const row of intents) {
       const dto = await payoutToDto(row);
-      const tenant = await pool.query<{ name: string | null }>(
-        `SELECT name FROM tenants WHERE id = $1`,
-        [row.tenant_id],
-      );
       const branch = await branchesRepository.findById(row.branch_id);
 
       dtos.push({
         ...dto,
-        tenantName: tenant.rows[0]?.name ?? null,
         branchName: branch?.name ?? 'Branch',
         failureReasonSafe: row.failure_reason ?? 'Payout could not be completed',
       });
@@ -606,6 +821,55 @@ export class PayoutsService {
         tx,
       );
 
+      // ─────────────────────────────────────────────────────────────
+      // Debit 1: TVC adjustment leaves the tenant pool.
+      //   - Negative TVC (early collector) → tenant loses, TVC pool gains.
+      //   - Positive TVC (late collector) → TVC pool loses, tenant gains.
+      // ─────────────────────────────────────────────────────────────
+      if (payout.tvc_adjustment !== 0n) {
+        const absTvc =
+          payout.tvc_adjustment < 0n ? -payout.tvc_adjustment : payout.tvc_adjustment;
+        const tvcDirection: 'CREDIT' | 'DEBIT' =
+          payout.tvc_adjustment < 0n ? 'CREDIT' : 'DEBIT';
+
+        await ledgerService.moveTvc(
+          {
+            tenantId: payout.tenant_id,
+            branchId: payout.branch_id,
+            reference: payout.reference,
+            amount: absTvc,
+            entryType: tvcDirection,
+            payoutId: payout.id,
+            description: `slot ${payout.recipient_slot}, cycle ${payout.cycle}`,
+            createdBy: actorId,
+          },
+          tx,
+        );
+      }
+
+      // ─────────────────────────────────────────────────────────────
+      // Debit 2: platform fee leaves the tenant pool.
+      // The corresponding PLATFORM-side credit was already written
+      // when the Super Admin confirmed the fee (confirmFee).
+      // ─────────────────────────────────────────────────────────────
+      if (payout.platform_fee > 0n) {
+        await ledgerService.debitTenantForFee(
+          {
+            tenantId: payout.tenant_id,
+            branchId: payout.branch_id,
+            reference: payout.reference,
+            amount: payout.platform_fee,
+            payoutId: payout.id,
+            description: `Platform fee for slot ${payout.recipient_slot}, cycle ${payout.cycle}`,
+            createdBy: actorId,
+          },
+          tx,
+        );
+      }
+
+      // ─────────────────────────────────────────────────────────────
+      // Debit 3: net payout leaves the tenant pool to the recipient.
+      // ─────────────────────────────────────────────────────────────
       await ledgerService.debitPayout(
         {
           tenantId: payout.tenant_id,

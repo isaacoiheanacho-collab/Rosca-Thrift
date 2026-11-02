@@ -32,7 +32,6 @@ import {
   type TenantMembershipRow,
 } from './tenants.repository';
 import { tenureRenewalRepository } from './tenure-renewal.repository';
-import { rotationService } from '../payouts/rotation.service';
 import { usersRepository } from '../users/users.repository';
 import { notificationsService } from '../notifications/notifications.service';
 
@@ -476,15 +475,9 @@ export class TenureRenewalService {
       renewed = true;
     });
 
-    // Generate cycle-1 intents for the new tenure (outside the tx - idempotent)
     const tenant = await tenantsRepository.findById(tenantId);
-    if (tenant) {
-      try {
-        await rotationService.ensureIntentsForCycle(tenantId, tenant.current_tenure, 1);
-      } catch (err) {
-        logger.error({ err, tenantId }, 'Failed to generate tenure-2 cycle-1 intents');
-      }
-    }
+    // NOTE: no eager intent generation here. Payout intents for cycle 1
+    // of the new tenure are generated when 12 contributions are confirmed.
 
     // Notify all tenant members (best-effort)
     if (renewed && tenant) {

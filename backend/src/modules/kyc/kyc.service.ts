@@ -14,6 +14,7 @@ import { provisioningService } from '../tenants/provisioning.service';
 import { notificationsService } from '../notifications/notifications.service';
 import { kycRepository, type KycStatus, type KycSubmissionRow } from './kyc.repository';
 import type { SubmitKycInput } from './kyc.schemas';
+import { pool } from '../../db';
 
 export interface RequestMeta {
   ipAddress?: string;
@@ -103,11 +104,37 @@ export class KycService {
       type: 'kyc-selfie',
     });
 
+    // For BRANCH_ADMIN, the "legal name" and "account name" are ALWAYS the
+    // branch name (the identity the admin registered with). This is the source
+    // of truth. We override whatever the client sent so it can never diverge.
+    let effectiveLegalName = input.legalName;
+    let effectiveAccountName = input.accountName;
+
+    if (user.role === 'BRANCH_ADMIN') {
+      const branchRes = await pool.query<{ name: string }>(
+        'SELECT name FROM branches WHERE id = $1',
+        [user.branch_id],
+      );
+      const branchName = branchRes.rows[0]?.name;
+      if (!branchName) {
+        throw new AppError({
+          code: 'KYC_BRANCH_MISSING',
+          httpStatus: 500,
+          message: 'Branch not found for this admin',
+        });
+      }
+      effectiveLegalName = branchName;
+      effectiveAccountName = branchName;
+    } else {
+      // SAVER — keep their own legal name as before, mirror to account name
+      effectiveAccountName = input.legalName;
+    }
+
     const row = await kycRepository.insert({
       userId,
       branchId: user.branch_id,
-      legalName: input.legalName,
-      accountName: input.legalName, // Force it to match legal name exactly
+      legalName: effectiveLegalName,
+      accountName: effectiveAccountName,
       selfieObjectKey: objectKey,
       bankName: input.bankName,
       accountNumber: input.accountNumber,

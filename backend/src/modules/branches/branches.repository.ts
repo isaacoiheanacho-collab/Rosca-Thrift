@@ -65,9 +65,16 @@ export class BranchesRepository {
     return result.rows[0] ?? null;
   }
 
-  async findById(id: string): Promise<BranchRow | null> {
-    const result = await pool.query<BranchRow>(
-      'SELECT * FROM branches WHERE id = $1',
+  async findById(id: string): Promise<BranchListRow | null> {
+    const result = await pool.query<BranchListRow>(
+      `SELECT 
+         b.*, 
+         u.full_name AS admin_name,
+         COALESCE(k.status, 'NOT_SUBMITTED') AS admin_kyc_status
+       FROM branches b
+       LEFT JOIN users u ON u.branch_id = b.id AND u.role = 'BRANCH_ADMIN'
+       LEFT JOIN kyc_submissions k ON k.user_id = u.id
+       WHERE b.id = $1`,
       [id],
     );
     return result.rows[0] ?? null;
@@ -107,7 +114,7 @@ export class BranchesRepository {
     // List query — JOIN users via branch_id + role so we always pick the
     // branch admin who actually belongs to this branch (safer than created_by,
     // which can be null during onboarding or point at the wrong user).
-    // Also JOIN the admin's most recent kyc_submissions row so the UI can
+    // Also JOIN the admin's kyc_submissions row so the UI can
     // surface a unified branch + admin KYC status.
     const listWhere =
       conditions.length > 0
@@ -121,11 +128,7 @@ export class BranchesRepository {
          COALESCE(k.status, 'NOT_SUBMITTED') AS admin_kyc_status
        FROM branches b
        LEFT JOIN users u ON u.branch_id = b.id AND u.role = 'BRANCH_ADMIN'
-       LEFT JOIN kyc_submissions k ON k.user_id = u.id AND k.id = (
-         SELECT id FROM kyc_submissions 
-         WHERE user_id = u.id 
-         ORDER BY created_at DESC LIMIT 1
-       )
+       LEFT JOIN kyc_submissions k ON k.user_id = u.id
        ${listWhere}
        ORDER BY b.created_at DESC
        LIMIT $${limitIdx} OFFSET $${offsetIdx}`,

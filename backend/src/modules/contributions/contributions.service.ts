@@ -15,6 +15,7 @@ import { record } from '../audit/audit.service';
 import { ledgerService } from '../ledger/ledger.service';
 import { usersRepository } from '../users/users.repository';
 import { notificationsService } from '../notifications/notifications.service';
+import { rotationService } from '../payouts/rotation.service';
 import {
   contributionsRepository,
   type ContributionIntentRow,
@@ -111,6 +112,7 @@ export interface TenantCycleMemberDto {
 
 export interface TenantLedgerDto {
   id: string;
+  accountType: 'TENANT' | 'TVC'; // NEW
   entryType: 'CREDIT' | 'DEBIT';
   entryKind: string;
   amountPence: string;
@@ -123,6 +125,7 @@ export interface TenantLedgerDto {
 
 export interface TenantReceiptDto {
   receiptId: string;
+  purpose: 'CONTRIBUTION' | 'PAYOUT' | 'PLATFORM_FEE';
   objectUrl: string;
   fileName: string;
   mimeType: string;
@@ -132,6 +135,7 @@ export interface TenantReceiptDto {
   claimedReference: string | null;
   claimedSenderName: string | null;
   intentReference: string | null;
+  payoutReference: string | null; // NEW
   contributionConfirmedAt: string | null;
   createdAt: string;
 }
@@ -472,6 +476,7 @@ export class ContributionsService {
     const rows = await contributionsRepository.listLedgerByTenant(tenantId, limit);
     return rows.map((r) => ({
       id: r.id,
+      accountType: r.account_type as 'TENANT' | 'TVC', // NEW
       entryType: r.entry_type,
       entryKind: r.entry_kind,
       amountPence: r.amount.toString(),
@@ -485,27 +490,31 @@ export class ContributionsService {
 
   async listTenantReceipts(tenantId: string, limit = 100): Promise<TenantReceiptDto[]> {
     const rows = await contributionsRepository.listReceiptsByTenantWithIntent(tenantId, limit);
-    const dtos: TenantReceiptDto[] = [];
 
-    for (const r of rows) {
-      const url = await getPresignedDownloadUrl(r.object_key, 300);
-      dtos.push({
-        receiptId: r.receipt_id,
-        objectUrl: url,
-        fileName: r.file_name,
-        mimeType: r.mime_type,
-        uploadedBy: r.uploaded_by,
-        uploadedByName: r.uploaded_by_name,
-        claimedAmountPence: r.claimed_amount?.toString() ?? null,
-        claimedReference: r.claimed_reference,
-        claimedSenderName: r.claimed_sender_name,
-        intentReference: r.intent_reference,
-        contributionConfirmedAt: r.contribution_confirmed_at?.toISOString() ?? null,
-        createdAt: r.created_at.toISOString(),
-      });
-    }
-
-    return dtos;
+    // Presign in parallel. The old sequential loop did one S3 round-trip
+    // per row, so 100 receipts = 100 back-to-back presigns. Promise.all
+    // collapses that to a single round-trip window.
+    return Promise.all(
+      rows.map(async (r) => {
+        const url = await getPresignedDownloadUrl(r.object_key, 300);
+        return {
+          receiptId: r.receipt_id,
+          purpose: r.purpose as 'CONTRIBUTION' | 'PAYOUT' | 'PLATFORM_FEE', // NEW
+          objectUrl: url,
+          fileName: r.file_name,
+          mimeType: r.mime_type,
+          uploadedBy: r.uploaded_by,
+          uploadedByName: r.uploaded_by_name,
+          claimedAmountPence: r.claimed_amount?.toString() ?? null,
+          claimedReference: r.claimed_reference,
+          claimedSenderName: r.claimed_sender_name,
+          intentReference: r.intent_reference,
+          payoutReference: r.payout_reference, // NEW
+          contributionConfirmedAt: r.contribution_confirmed_at?.toISOString() ?? null,
+          createdAt: r.created_at.toISOString(),
+        };
+      }),
+    );
   }
 
   async confirmContribution(
@@ -592,6 +601,38 @@ export class ContributionsService {
       });
     } catch (err) {
       logger.error({ err, intentId: intent.id }, 'Contribution confirmed notification failed');
+    }
+
+    // ─────────────────────────────────────────────────────────────
+    // NEW: if this was the 12th confirmed contribution for this
+    // cycle, generate the payout + fee intents NOW, with the actual
+    // money in the pool. This is the ONLY place payout intents are
+    // created — never on cycle start.
+    // ─────────────────────────────────────────────────────────────
+    try {
+      const cycleCountRes = await pool.query<{ count: string }>(
+        `SELECT COUNT(*)::text AS count FROM contributions
+         WHERE tenant_id = $1 AND tenure = $2 AND cycle = $3`,
+        [intent.tenant_id, intent.tenure, intent.cycle],
+      );
+      const confirmedCount = Number(cycleCountRes.rows[0]?.count ?? '0');
+
+      if (confirmedCount >= 12) {
+        await rotationService.ensureIntentsForCycle(
+          intent.tenant_id,
+          intent.tenure,
+          intent.cycle,
+        );
+        logger.info(
+          { tenantId: intent.tenant_id, cycle: intent.cycle, tenure: intent.tenure },
+          'Cycle complete — payout + fee intents generated',
+        );
+      }
+    } catch (err) {
+      logger.error(
+        { err, tenantId: intent.tenant_id, cycle: intent.cycle },
+        'Failed to generate payout intents after cycle completion',
+      );
     }
 
     logger.info(

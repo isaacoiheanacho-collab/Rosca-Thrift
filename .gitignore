@@ -31,4 +31,10 @@ Thumbs.db
 
 # Coverage
 coverage/
-.nyc_output/
+.nyc_output/frontend/ 
+
+# Frontend and local zips
+frontend/
+frontend.zip
+
+backend/reactivateredisworker.txt

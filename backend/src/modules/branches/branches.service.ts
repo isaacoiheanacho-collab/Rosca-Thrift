@@ -5,6 +5,7 @@
 import { logger } from '../../logger';
 import { env } from '../../config/env';
 import { withTransaction } from '../../db';
+import { pool } from '../../db';
 import { AppError, ConflictError, NotFoundError } from '../../errors';
 import { record } from '../audit/audit.service';
 import { hashPassword } from '../../utils/password';
@@ -317,10 +318,25 @@ export class BranchesService {
     status?: BranchStatus;
     onboardingStatus?: OnboardingStatus;
   }): Promise<{ branches: BranchDto[]; total: number }> {
+    // 1. Fetch raw branches
     const { branches, total } = await branchesRepository.list(options);
-    // branches here are BranchListRow (BranchRow & { admin_name, admin_kyc_status })
-    // so passing them into toDto() carries both fields through.
-    return { branches: branches.map((row) => toDto(row)), total };
+
+    // 2. Map to DTO and force the KYC status to be one of our exact enums
+    const dtos = branches.map((row) => {
+      const dto = toDto(row);
+
+      // Force uppercase and exact match
+      const rawKyc = row.admin_kyc_status?.toUpperCase();
+
+      if (rawKyc === 'PENDING') dto.adminKycStatus = 'PENDING';
+      else if (rawKyc === 'APPROVED') dto.adminKycStatus = 'APPROVED';
+      else if (rawKyc === 'REJECTED') dto.adminKycStatus = 'REJECTED';
+      else dto.adminKycStatus = 'NOT_SUBMITTED';
+
+      return dto;
+    });
+
+    return { branches: dtos, total };
   }
 
   async getById(id: string): Promise<BranchDto> {
@@ -338,6 +354,7 @@ export class BranchesService {
   async getPublicBySlug(slug: string): Promise<PublicBranchDto> {
     const row = await branchesRepository.findBySlug(slug);
     if (!row) throw new NotFoundError('Branch');
+
     if (row.status !== 'ACTIVE') {
       throw new AppError({
         code: 'BRANCH_NOT_ACTIVE',
@@ -345,6 +362,7 @@ export class BranchesService {
         message: 'This branch is not currently accepting members',
       });
     }
+
     if (row.onboarding_status !== 'APPROVED') {
       throw new AppError({
         code: 'BRANCH_NOT_APPROVED',
@@ -352,6 +370,29 @@ export class BranchesService {
         message: 'This branch is not yet live on the platform',
       });
     }
+
+    // DUAL-APPROVAL GATE: the branch's KYC must also be approved before
+    // savers can register. Onboarding alone proves nothing — the bank
+    // verification is what makes the branch legally real.
+    const kycRes = await pool.query<{ status: string }>(
+      `SELECT k.status
+       FROM kyc_submissions k
+       JOIN users u ON u.id = k.user_id
+       WHERE u.branch_id = $1 AND u.role = 'BRANCH_ADMIN'
+       ORDER BY k.created_at DESC
+       LIMIT 1`,
+      [row.id],
+    );
+    const adminKycStatus = kycRes.rows[0]?.status;
+    if (adminKycStatus !== 'APPROVED') {
+      throw new AppError({
+        code: 'BRANCH_NOT_KYC_VERIFIED',
+        httpStatus: 403,
+        message:
+          'This branch is not yet fully verified. Please contact the branch admin directly.',
+      });
+    }
+
     return toPublicDto(row);
   }
 
@@ -366,6 +407,7 @@ export class BranchesService {
   async getPublicStatusBySlug(slug: string): Promise<PublicBranchStatusDto> {
     const row = await branchesRepository.findBySlug(slug);
     if (!row) throw new NotFoundError('Branch');
+
     return {
       slug: row.slug,
       name: row.name,
@@ -495,6 +537,7 @@ export class BranchesService {
   ): Promise<BranchDto> {
     const existing = await branchesRepository.findById(branchId);
     if (!existing) throw new NotFoundError('Branch');
+
     if (existing.onboarding_status === 'APPROVED') {
       throw new ConflictError('Branch is already approved', 'BRANCH_ALREADY_APPROVED');
     }
@@ -522,6 +565,7 @@ export class BranchesService {
   ): Promise<BranchDto> {
     const existing = await branchesRepository.findById(branchId);
     if (!existing) throw new NotFoundError('Branch');
+
     if (existing.onboarding_status === 'REJECTED') {
       throw new ConflictError('Branch is already rejected', 'BRANCH_ALREADY_REJECTED');
     }

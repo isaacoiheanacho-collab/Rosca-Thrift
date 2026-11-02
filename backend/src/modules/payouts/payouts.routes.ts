@@ -3,6 +3,8 @@
  *
  * Branch admin:
  *   GET  /api/branch-admin/payouts                    - list own branch payouts
+ *   GET  /api/branch-admin/payouts/maintenance-account - platform fee destination
+ *   GET  /api/branch-admin/payouts/saver-details/:userId - saver's approved bank details
  *   GET  /api/branch-admin/payouts/:id                - view one
  *   POST /api/branch-admin/payouts/fees/:id/receipt   - upload fee receipt
  *   POST /api/branch-admin/payouts/:id/receipt        - upload payout receipt
@@ -12,7 +14,8 @@
  *   GET  /api/branch-admin/payouts/failed             - list failed for this branch
  *
  * Super admin:
- *   GET  /api/super-admin/payouts/fees/pending        - queue of fee receipts
+ *   GET  /api/super-admin/payouts/fees                - state-filtered fee queue
+ *                                                       ?state=PENDING|CONFIRMED|ALL
  *   POST /api/super-admin/payouts/fees/:id/confirm    - confirm fee received
  *   POST /api/super-admin/payouts/fees/:id/reject     - reject fee receipt
  *   GET  /api/super-admin/payouts/:id                 - view any payout
@@ -30,8 +33,10 @@ import multer from 'multer';
 import { requireAuth, requireBranchAdmin, requireSuperAdmin } from '../../middleware/auth';
 import { validate } from '../../middleware/validate';
 import { AppError } from '../../errors';
+import { pool } from '../../db';
 import { payoutsService, type RequestMeta } from './payouts.service';
 import { tenantsRepository } from '../tenants/tenants.repository';
+import { poolAccountsRepository } from '../pool-accounts/pool-accounts.repository';
 import {
   ConfirmFeeSchema,
   ConfirmPayoutQuerySchema,
@@ -157,6 +162,23 @@ branchAdminPayoutsRouter.get(
   },
 );
 
+/**
+ * Platform maintenance account — where the branch admin sends the platform
+ * fee for the current payout cycle. Static route, must be declared before
+ * the generic `/:id` route so it isn't swallowed by it.
+ */
+branchAdminPayoutsRouter.get(
+  '/maintenance-account',
+  async (_req: Request, res: Response, next: NextFunction) => {
+    try {
+      const account = await poolAccountsRepository.findPlatformMaintenanceAccount();
+      res.json({ ok: true, data: account });
+    } catch (err) {
+      next(err);
+    }
+  },
+);
+
 branchAdminPayoutsRouter.get(
   '/failed',
   validate({ query: ListFailedQuerySchema }),
@@ -176,6 +198,64 @@ branchAdminPayoutsRouter.get(
   },
 );
 
+/**
+ * Saver bank details for a specific payout recipient — used by the branch
+ * admin's "Upload Payout Receipt" modal to show the saver's approved bank
+ * account.
+ *
+ * ⚠️  ROUTE ORDER IS CRITICAL ⚠️
+ * This MUST be registered BEFORE `GET /:id`. If `/saver-details/:userId`
+ * were placed after `/:id`, Express would match `/saver-details/abc123`
+ * against the `/:id` pattern with `id = "saver-details"` (since `/saver-details`
+ * is a single path segment) and the request would 404 or return the wrong
+ * resource. Keep this block above the `/:id` block.
+ *
+ * Only returns the *latest APPROVED* KYC submission, and only exposes the
+ * fields required to make the transfer (legal name, account name, bank
+ * name, sort code, account number). No other PII is returned.
+ */
+branchAdminPayoutsRouter.get(
+  '/saver-details/:userId',
+  async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const userId = String(req.params.userId);
+
+      // Fetch the latest approved KYC for this user
+      const result = await pool.query<{
+        legal_name: string | null;
+        account_name: string | null;
+        bank_name: string | null;
+        sort_code: string | null;
+        account_number: string | null;
+      }>(
+        `SELECT legal_name, account_name, bank_name, sort_code, account_number
+         FROM kyc_submissions
+         WHERE user_id = $1 AND status = 'APPROVED'
+         ORDER BY reviewed_at DESC
+         LIMIT 1`,
+        [userId],
+      );
+
+      if (result.rows.length === 0) {
+        throw new AppError({
+          code: 'NOT_FOUND',
+          httpStatus: 404,
+          message: 'No approved KYC found for this saver',
+        });
+      }
+
+      res.json({ ok: true, data: result.rows[0] });
+    } catch (err) {
+      next(err);
+    }
+  },
+);
+
+/**
+ * Generic payout-by-id route. MUST be declared AFTER any static route that
+ * could otherwise be matched by the `:id` wildcard (e.g. `/saver-details/:userId`
+ * and `/maintenance-account`, both of which have already been registered above).
+ */
 branchAdminPayoutsRouter.get(
   '/:id',
   validate({ params: PayoutIdParamSchema }),
@@ -331,13 +411,62 @@ export const superAdminPayoutsRouter = Router();
 
 superAdminPayoutsRouter.use(requireSuperAdmin);
 
+/**
+ * State-filtered fee queue for the Super Admin "Payout Approvals" tab.
+ *
+ * Query params:
+ *   state   - 'PENDING' (default) | 'CONFIRMED' | 'ALL'
+ *   limit   - page size (default 50)
+ *   offset  - page offset (default 0)
+ *
+ * Unknown state values are rejected with a 400 rather than silently
+ * falling back, so a typo in the frontend doesn't quietly turn a history
+ * view into the pending queue.
+ */
+superAdminPayoutsRouter.get(
+  '/fees',
+  async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const rawState = String(req.query.state || 'PENDING').toUpperCase();
+
+      if (rawState !== 'PENDING' && rawState !== 'CONFIRMED' && rawState !== 'ALL') {
+        throw new AppError({
+          code: 'FEES_INVALID_STATE',
+          httpStatus: 400,
+          message: `Invalid state "${rawState}". Must be PENDING, CONFIRMED, or ALL.`,
+        });
+      }
+
+      const stateParam = rawState as 'PENDING' | 'CONFIRMED' | 'ALL';
+      const limit = Number(req.query.limit) || 50;
+      const offset = Number(req.query.offset) || 0;
+
+      const result = await payoutsService.listFeeIntentsForReview(stateParam, {
+        limit,
+        offset,
+      });
+
+      res.json({ ok: true, data: { ...result, limit, offset } });
+    } catch (err) {
+      next(err);
+    }
+  },
+);
+
+/**
+ * Legacy alias — preserved for any older client that still hits
+ * /fees/pending. Delegates to the new /fees handler logic by reusing the
+ * same service call with the PENDING filter.
+ *
+ * This can be removed once the frontend is fully migrated to /fees.
+ */
 superAdminPayoutsRouter.get(
   '/fees/pending',
   validate({ query: ListFeesQuerySchema }),
   async (req: Request, res: Response, next: NextFunction) => {
     try {
       const q = req.query as unknown as { limit: number; offset: number };
-      const result = await payoutsService.listPendingFeeIntents(q);
+      const result = await payoutsService.listFeeIntentsForReview('PENDING', q);
       res.json({ ok: true, data: { ...result, limit: q.limit, offset: q.offset } });
     } catch (err) {
       next(err);

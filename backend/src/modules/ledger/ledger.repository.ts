@@ -2,14 +2,23 @@
  * Ledger repository — append-only ledger entries.
  *
  * Every credit and debit to any account (tenant pool, branch fee, platform
- * maintenance) is recorded here. No updates, no deletes — enforced by DB
- * trigger.
+ * maintenance, TVC) is recorded here. No updates, no deletes — enforced by
+ * DB trigger.
+ *
+ * Account types in play:
+ *   - TENANT      — the pooled savings balance that cycle payouts draw from.
+ *   - BRANCH_FEE  — fee-tracking per branch (what the branch has paid to
+ *                   the platform for its cycles).
+ *   - PLATFORM    — the platform's own maintenance account balance.
+ *   - TVC         — Time-Value Contribution pool. Credits/debits here track
+ *                   the early-vs-late adjustment applied to payouts so the
+ *                   TVC account nets to zero over a full cycle.
  */
 
 import type { PoolClient } from 'pg';
 import { pool } from '../../db';
 
-export type LedgerAccountType = 'TENANT' | 'BRANCH_FEE' | 'PLATFORM';
+export type LedgerAccountType = 'TENANT' | 'BRANCH_FEE' | 'PLATFORM' | 'TVC';
 export type LedgerEntryType = 'CREDIT' | 'DEBIT';
 export type LedgerEntryKind =
   | 'CONTRIBUTION'
@@ -106,6 +115,25 @@ export class LedgerRepository {
        FROM ledger_entries
        WHERE account_type = 'BRANCH_FEE' AND branch_id = $1`,
       [branchId],
+    );
+    return BigInt(result.rows[0]?.balance ?? '0');
+  }
+
+  /**
+   * TVC pool balance for a tenant: CREDITs minus DEBITs on the TVC account.
+   *
+   * The TVC pool holds the time-value adjustments applied to payouts. In a
+   * well-formed cycle, the sum of early-collector debits and late-collector
+   * credits nets to (approximately) zero — this method lets you verify that
+   * invariant and surface any drift from rounding, failed adjustments, or
+   * manual corrections.
+   */
+  async tvcBalance(tenantId: string): Promise<bigint> {
+    const result = await pool.query<{ balance: string }>(
+      `SELECT COALESCE(SUM(CASE WHEN entry_type = 'CREDIT' THEN amount ELSE -amount END), 0)::text AS balance
+       FROM ledger_entries
+       WHERE account_type = 'TVC' AND tenant_id = $1`,
+      [tenantId],
     );
     return BigInt(result.rows[0]?.balance ?? '0');
   }

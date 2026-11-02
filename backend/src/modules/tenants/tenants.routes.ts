@@ -16,6 +16,7 @@
  *   GET   /api/super-admin/tenants/all                 - list all tenants across branches
  *   GET   /api/super-admin/tenants/by-branch/:branchId - list tenants in a branch
  *   GET   /api/super-admin/tenants/:id                 - view one
+ *   GET   /api/super-admin/tenants/:id/members         - view members of a tenant
  *   PATCH /api/super-admin/tenants/:id/status          - change status
  *   POST  /api/super-admin/tenants/provision/:userId   - manual provisioning
  */
@@ -29,6 +30,8 @@ import { pool } from '../../db';
 import { tenantsService, type RequestMeta } from './tenants.service';
 import { provisioningService } from './provisioning.service';
 import { usersRepository } from '../users/users.repository';
+import { contributionsService } from '../contributions/contributions.service';
+import { payoutsRepository } from '../payouts/payouts.repository';
 import { ListTenantsQuerySchema, UpdateTenantStatusSchema } from './tenants.schemas';
 
 function metaOf(req: Request): RequestMeta {
@@ -42,7 +45,57 @@ export const tenantsRouter = Router();
 tenantsRouter.get('/me', requireAuth, async (req: Request, res: Response, next: NextFunction) => {
   try {
     const dto = await tenantsService.getMyTenant(req.user!.sub);
-    res.json({ ok: true, data: dto });
+    if (!dto) {
+      return res.json({ ok: true, data: null });
+    }
+
+    // ─────────────────────────────────────────────────────────────
+    // Check if the current cycle has all 12 contributions confirmed.
+    // Only if so is the payout intent meaningful to display.
+    // ─────────────────────────────────────────────────────────────
+    const cycleCountRes = await pool.query<{ count: string }>(
+      `SELECT COUNT(*)::text AS count FROM contributions
+       WHERE tenant_id = $1 AND tenure = $2 AND cycle = $3`,
+      [dto.tenant.id, dto.tenant.currentTenure, dto.tenant.currentCycle],
+    );
+    const confirmedCount = Number(cycleCountRes.rows[0]?.count ?? '0');
+    const cycleComplete = confirmedCount >= 12;
+
+    let formattedPayout = null;
+
+    if (cycleComplete) {
+      const payoutIntent = await payoutsRepository.findPayoutIntent(
+        dto.tenant.id,
+        dto.tenant.currentTenure,
+        dto.tenant.currentCycle,
+      );
+
+      if (payoutIntent) {
+        const recipient = await usersRepository.findById(payoutIntent.recipient_user_id);
+        formattedPayout = {
+          grossPence: payoutIntent.gross_amount.toString(),
+          tvcAdjustmentPence: payoutIntent.tvc_adjustment.toString(),
+          potAfterTvcPence: payoutIntent.pot_after_tvc.toString(),
+          platformFeePence: payoutIntent.platform_fee.toString(),
+          netAmountPence: payoutIntent.net_amount.toString(),
+          state: payoutIntent.state,
+          recipientUserId: payoutIntent.recipient_user_id,
+          recipientName: recipient?.full_name || 'Unknown',
+          recipientSlot: payoutIntent.recipient_slot,
+          isMyTurn: payoutIntent.recipient_user_id === req.user!.sub,
+        };
+      }
+    }
+
+    res.json({
+      ok: true,
+      data: {
+        ...dto,
+        payoutIntent: formattedPayout,
+        cycleComplete,
+        confirmedContributionsCount: confirmedCount,
+      },
+    });
   } catch (err) {
     next(err);
   }
@@ -228,6 +281,50 @@ superAdminTenantsRouter.post(
       }
       const result = await provisioningService.provisionUserToTenant(user.id, user.branch_id);
       res.json({ ok: true, data: result });
+    } catch (err) {
+      next(err);
+    }
+  },
+);
+
+superAdminTenantsRouter.get(
+  '/:id/members',
+  async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const tenantId = String(req.params.id);
+      
+      const tenant = await tenantsService.getById(tenantId);
+      if (!tenant) throw new NotFoundError('Tenant');
+
+      // Fetch the roster for the current cycle (includes contribution status)
+      const members = await contributionsService.listTenantCycleMembers(
+        tenantId, 
+        tenant.currentTenure, 
+        tenant.currentCycle
+      );
+
+      // Fetch financial totals for this tenant
+      const financials = await pool.query<{ contrib_sum: string; contrib_count: string; payout_sum: string; payout_count: string }>(
+        `SELECT 
+           (SELECT COALESCE(SUM(amount), 0)::text FROM contributions WHERE tenant_id = $1) AS contrib_sum,
+           (SELECT COUNT(*)::text FROM contributions WHERE tenant_id = $1) AS contrib_count,
+           (SELECT COALESCE(SUM(net_amount), 0)::text FROM payout_intents WHERE tenant_id = $1 AND state = 'CONFIRMED') AS payout_sum,
+           (SELECT COUNT(*)::text FROM payout_intents WHERE tenant_id = $1 AND state = 'CONFIRMED') AS payout_count`,
+        [tenantId]
+      );
+
+      const stats = financials.rows[0];
+
+      res.json({ 
+        ok: true, 
+        data: {
+          members,
+          totalContributedPence: stats.contrib_sum,
+          totalContributions: Number(stats.contrib_count),
+          totalPayoutsPence: stats.payout_sum,
+          totalPayouts: Number(stats.payout_count),
+        } 
+      });
     } catch (err) {
       next(err);
     }

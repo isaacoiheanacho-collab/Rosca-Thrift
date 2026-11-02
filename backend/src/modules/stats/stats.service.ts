@@ -14,6 +14,7 @@ import {
   type BranchMoneyThisMonth,
   type MonthlyVolumeRow,
   type MoneyThisMonth,
+  type PlatformAnalytics,
   type PlatformCounts,
 } from './stats.repository';
 
@@ -195,6 +196,10 @@ export class StatsService {
       payouts: shared.payouts,
       renewals: shared.renewals,
     };
+  }
+
+  async getPlatformAnalytics(): Promise<PlatformAnalytics> {
+    return statsRepository.platformAnalytics();
   }
 }
 

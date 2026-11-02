@@ -78,6 +78,15 @@ export interface MonthlyVolumeRow {
   payoutsCount: number;
 }
 
+export interface PlatformAnalytics {
+  totalContributionsPence: bigint;
+  totalContributionsCount: number;
+  totalPayoutsPence: bigint;
+  totalPayoutsCount: number;
+  topBranches: Array<{ name: string; totalPence: bigint; count: number }>;
+  recentActivity: Array<{ type: string; amountPence: bigint; name: string; reference: string; date: Date }>;
+}
+
 export class StatsRepository {
   // ─────────────────────────────────────────────────────────────
   // Platform-wide
@@ -183,7 +192,7 @@ export class StatsRepository {
         ),
         pool.query<{ count: string }>(
           `SELECT COUNT(*)::text AS count FROM payout_intents
-           WHERE state = 'RECEIPT_UPLOADED'`,
+           WHERE state IN ('PENDING', 'FEE_PAID', 'RECEIPT_UPLOADED')`,
         ),
       ]);
 
@@ -196,6 +205,29 @@ export class StatsRepository {
       payoutsThisMonthCount: Number(payoutRes.rows[0]?.count ?? '0'),
       payoutsPendingFees: Number(feePendingRes.rows[0]?.count ?? '0'),
       payoutsPendingConfirmation: Number(payoutPendingRes.rows[0]?.count ?? '0'),
+    };
+  }
+
+  /**
+   * NEW: Simplified financials for the Overview stats cards.
+   * Renamed from `platformMoneyThisMonth` to avoid a duplicate method name.
+   */
+  async platformFinancialsThisMonth(): Promise<{ contribGbp: string; payoutGbp: string }> {
+    const result = await pool.query<{ contrib_sum: string; payout_sum: string }>(`
+      SELECT 
+        (SELECT COALESCE(SUM(amount), 0)::text 
+         FROM contributions 
+         WHERE confirmed_at >= date_trunc('month', NOW())) AS contrib_sum,
+        (SELECT COALESCE(SUM(net_amount), 0)::text 
+         FROM payout_intents 
+         WHERE payout_confirmed_at IS NOT NULL 
+           AND payout_confirmed_at >= date_trunc('month', NOW())) AS payout_sum
+    `);
+    
+    const row = result.rows[0]!;
+    return {
+      contribGbp: (Number(row.contrib_sum) / 100).toFixed(2),
+      payoutGbp: (Number(row.payout_sum) / 100).toFixed(2),
     };
   }
 
@@ -251,6 +283,79 @@ export class StatsRepository {
       payoutsPence: BigInt(r.payouts_pence),
       payoutsCount: Number(r.payouts_count),
     }));
+  }
+
+  async platformAnalytics(): Promise<PlatformAnalytics> {
+    const [
+      totalsRes,
+      topBranchesRes,
+      recentContribsRes,
+      recentPayoutsRes
+    ] = await Promise.all([
+      // 1. All-time totals
+      pool.query<{ contrib_sum: string; contrib_count: string; payout_sum: string; payout_count: string }>(`
+        SELECT 
+          (SELECT COALESCE(SUM(amount), 0)::text FROM contributions) AS contrib_sum,
+          (SELECT COUNT(*)::text FROM contributions) AS contrib_count,
+          (SELECT COALESCE(SUM(net_amount), 0)::text FROM payout_intents WHERE payout_confirmed_at IS NOT NULL) AS payout_sum,
+          (SELECT COUNT(*)::text FROM payout_intents WHERE payout_confirmed_at IS NOT NULL) AS payout_count
+      `),
+      
+      // 2. Top branches by volume
+      pool.query<{ name: string; total: string; count: string }>(`
+        SELECT b.name, COALESCE(SUM(c.amount), 0)::text AS total, COUNT(c.id)::text AS count
+        FROM branches b
+        JOIN contributions c ON c.branch_id = b.id
+        GROUP BY b.id, b.name
+        ORDER BY SUM(c.amount) DESC
+        LIMIT 5
+      `),
+
+      // 3. Recent contributions (for activity feed)
+      pool.query<{ type: string; amount: string; name: string; reference: string; date: Date }>(`
+        SELECT 'Contribution' AS type, c.amount::text, u.full_name AS name, c.reference, c.confirmed_at AS date
+        FROM contributions c
+        JOIN users u ON u.id = c.user_id
+        ORDER BY c.confirmed_at DESC
+        LIMIT 5
+      `),
+
+      // 4. Recent payouts (for activity feed)
+      pool.query<{ type: string; amount: string; name: string; reference: string; date: Date }>(`
+        SELECT 'Payout' AS type, p.net_amount::text AS amount, u.full_name AS name, p.reference, p.payout_confirmed_at AS date
+        FROM payout_intents p
+        JOIN users u ON u.id = p.recipient_user_id
+        WHERE p.payout_confirmed_at IS NOT NULL
+        ORDER BY p.payout_confirmed_at DESC
+        LIMIT 5
+      `)
+    ]);
+
+    const totals = totalsRes.rows[0]!;
+    
+    // Merge and sort recent activity
+    const recentActivity = [...recentContribsRes.rows, ...recentPayoutsRes.rows]
+      .sort((a, b) => b.date.getTime() - a.date.getTime())
+      .slice(0, 10);
+
+    return {
+      totalContributionsPence: BigInt(totals.contrib_sum),
+      totalContributionsCount: Number(totals.contrib_count),
+      totalPayoutsPence: BigInt(totals.payout_sum),
+      totalPayoutsCount: Number(totals.payout_count),
+      topBranches: topBranchesRes.rows.map(r => ({
+        name: r.name,
+        totalPence: BigInt(r.total),
+        count: Number(r.count),
+      })),
+      recentActivity: recentActivity.map(a => ({
+        type: a.type,
+        amountPence: BigInt(a.amount),
+        name: a.name,
+        reference: a.reference,
+        date: a.date,
+      })),
+    };
   }
 
   // ─────────────────────────────────────────────────────────────
@@ -341,7 +446,7 @@ export class StatsRepository {
         ),
         pool.query<{ count: string }>(
           `SELECT COUNT(*)::text AS count FROM payout_intents
-           WHERE branch_id = $1 AND state = 'RECEIPT_UPLOADED'`,
+           WHERE branch_id = $1 AND state IN ('PENDING', 'FEE_PAID', 'RECEIPT_UPLOADED')`,
           [branchId],
         ),
       ]);

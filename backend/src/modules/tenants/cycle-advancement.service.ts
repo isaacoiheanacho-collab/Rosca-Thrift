@@ -10,9 +10,14 @@
  *   - Lock the tenant row (SELECT ... FOR UPDATE)
  *   - Check: status=ACTIVE
  *   - Check: current cycle's payout_intent.state = CONFIRMED
- *   - If both true: advance the cycle (increment, reset timestamps, gen intents)
+ *   - If both true: advance the cycle (increment, reset timestamps)
  *   - If cycle was 12: mark tenure COMPLETE and open renewal vote
  *   - If any check fails: silently do nothing (idempotent)
+ *
+ * Payout + fee intents for the NEW cycle are NOT generated here — they
+ * are generated when the 12th contribution for that cycle is confirmed
+ * (see contributionsService.confirmContribution). This ensures the pool
+ * reflects the actual money collected, not a projection.
  *
  * Notifications:
  *   - After advancing to a new cycle: notify all tenant members
@@ -22,7 +27,6 @@
 import { logger } from '../../logger';
 import { withTransaction } from '../../db';
 import { tenantsRepository, type TenantRow } from './tenants.repository';
-import { rotationService } from '../payouts/rotation.service';
 import { tenureRenewalService } from './tenure-renewal.service';
 import { notificationsService } from '../notifications/notifications.service';
 
@@ -87,8 +91,10 @@ export class CycleAdvancementService {
       }
 
       // Idempotency is enforced by the payout state check above.
-      // Once we advance, the NEW cycle's payout is PENDING (freshly created),
-      // so the next call will find it not CONFIRMED and will not double-advance.
+      // Once we advance, the NEW cycle's payout will not exist until
+      // 12 contributions are confirmed (and will be PENDING when it does),
+      // so the next call will find it absent/not-CONFIRMED and will not
+      // double-advance.
 
       const previousCycle = tenant.current_cycle;
       const isFinalCycle = previousCycle >= CYCLES_PER_TENURE;
@@ -150,35 +156,10 @@ export class CycleAdvancementService {
     }
 
     if (result.advanced && result.newCycle && !result.tenantCompleted) {
-      // Generate next cycle's intents (idempotent)
-      try {
-        const tenant = await tenantsRepository.findById(tenantId);
-        const tenureForIntents = tenant?.current_tenure ?? 1;
-
-        const intents = await rotationService.ensureIntentsForCycle(
-          tenantId,
-          tenureForIntents,
-          result.newCycle,
-        );
-        result.newPayoutIntentId = intents.payoutIntentId;
-        result.newFeeIntentId = intents.feeIntentId;
-
-        logger.info(
-          {
-            tenantId,
-            tenure: tenureForIntents,
-            newCycle: result.newCycle,
-            payoutIntentId: intents.payoutIntentId,
-            feeIntentId: intents.feeIntentId,
-          },
-          'CycleAdvancement: next cycle intents generated',
-        );
-      } catch (err) {
-        logger.error(
-          { err, tenantId, newCycle: result.newCycle },
-          'CycleAdvancement: failed to generate next cycle intents',
-        );
-      }
+      // NOTE: payout + fee intents for the new cycle are NOT generated here.
+      // They are generated when the 12th contribution is confirmed
+      // (see contributions.service.confirmContribution). This ensures
+      // the pool shows the actual money collected, not a projection.
 
       // Notify all tenant members (best-effort)
       try {

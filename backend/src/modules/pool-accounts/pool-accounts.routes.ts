@@ -144,27 +144,29 @@ superAdminBranchPoolAccountRouter.get(
   '/pending',
   async (_req: Request, res: Response, next: NextFunction) => {
     try {
-      const result = await pool.query(
-        `SELECT 
-           k.id AS kyc_id,
-           k.legal_name,
-           k.account_name,
-           k.bank_name,
-           k.sort_code,
-           k.account_number,
-           k.selfie_object_key,
-           k.created_at,
-           u.id AS admin_id,
-           u.full_name AS admin_name,
-           u.phone AS admin_phone,
-           b.id AS branch_id,
-           b.name AS branch_name
-         FROM kyc_submissions k
-         JOIN users u ON u.id = k.user_id
-         JOIN branches b ON b.id = u.branch_id
-         WHERE k.status = 'PENDING' AND u.role = 'BRANCH_ADMIN'
-         ORDER BY k.created_at ASC`
-      );
+      // We use the standard KYC service but filter specifically for BRANCH_ADMINs
+      const result = await pool.query(`
+        SELECT 
+          k.id AS kyc_id,
+          k.legal_name,
+          k.account_name,
+          k.bank_name,
+          k.sort_code,
+          k.account_number,
+          k.selfie_object_key,
+          k.created_at,
+          k.status AS kyc_status,
+          u.id AS admin_id,
+          u.full_name AS admin_name,
+          u.phone AS admin_phone,
+          b.id AS branch_id,
+          b.name AS branch_name
+        FROM kyc_submissions k
+        JOIN users u ON u.id = k.user_id
+        JOIN branches b ON b.id = u.branch_id
+        WHERE u.role = 'BRANCH_ADMIN'
+        ORDER BY k.created_at DESC
+      `);
       
       // Generate presigned URLs for the selfies
       const accounts = await Promise.all(result.rows.map(async (row: any) => {

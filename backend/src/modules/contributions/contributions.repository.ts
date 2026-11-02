@@ -79,6 +79,7 @@ export interface TenantCycleMemberRow {
 
 export interface TenantLedgerRow {
   id: string;
+  account_type: string;
   entry_type: 'CREDIT' | 'DEBIT';
   entry_kind: string;
   amount: bigint;
@@ -90,6 +91,7 @@ export interface TenantLedgerRow {
 
 export interface TenantReceiptRow {
   receipt_id: string;
+  purpose: string;
   object_key: string;
   file_name: string;
   mime_type: string;
@@ -99,6 +101,7 @@ export interface TenantReceiptRow {
   claimed_reference: string | null;
   claimed_sender_name: string | null;
   intent_reference: string | null;
+  payout_reference: string | null;
   contribution_confirmed_at: Date | null;
   created_at: Date;
 }
@@ -500,12 +503,21 @@ export class ContributionsRepository {
     return result.rows;
   }
 
-  /** Tenant ledger. */
+  /** Tenant ledger (includes the TVC pool for transparency). */
   async listLedgerByTenant(tenantId: string, limit: number): Promise<TenantLedgerRow[]> {
     const result = await pool.query<TenantLedgerRow>(
-      `SELECT id, entry_type, entry_kind, amount, currency, reference, description, created_at
+      `SELECT 
+         id, 
+         account_type, 
+         entry_type, 
+         entry_kind, 
+         amount, 
+         currency, 
+         reference, 
+         description, 
+         created_at
        FROM ledger_entries
-       WHERE account_type = 'TENANT' AND tenant_id = $1
+       WHERE account_type IN ('TENANT', 'TVC') AND tenant_id = $1
        ORDER BY created_at DESC
        LIMIT $2`,
       [tenantId, limit],
@@ -521,6 +533,7 @@ export class ContributionsRepository {
     const result = await pool.query<TenantReceiptRow>(
       `SELECT
          r.id               AS receipt_id,
+         r.purpose          AS purpose,
          r.object_key       AS object_key,
          r.file_name        AS file_name,
          r.mime_type        AS mime_type,
@@ -530,13 +543,15 @@ export class ContributionsRepository {
          r.claimed_reference AS claimed_reference,
          r.claimed_sender_name AS claimed_sender_name,
          i.reference        AS intent_reference,
+         pi.reference       AS payout_reference,
          c.confirmed_at     AS contribution_confirmed_at,
          r.created_at       AS created_at
        FROM receipts r
          INNER JOIN users u ON u.id = r.uploaded_by
          LEFT JOIN contribution_intents i ON i.id = r.intent_id
          LEFT JOIN contributions c ON c.intent_id = i.id
-       WHERE i.tenant_id = $1
+         LEFT JOIN payout_intents pi ON pi.id = r.payout_id
+       WHERE COALESCE(i.tenant_id, pi.tenant_id) = $1
        ORDER BY r.created_at DESC
        LIMIT $2`,
       [tenantId, limit],

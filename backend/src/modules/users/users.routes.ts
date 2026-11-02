@@ -7,6 +7,7 @@ import { validate } from '../../middleware/validate';
 import { requireAuth, requireSuperAdmin } from '../../middleware/auth';
 import { AppError } from '../../errors';
 import { pool } from '../../db';
+import { getPresignedDownloadUrl } from '../../utils/s3';
 import { usersService, type RequestMeta } from './users.service';
 import {
   ChangePasswordSchema,
@@ -148,22 +149,83 @@ router.post(
 // ─────────────────────────────────────────────────────────────
 
 router.get(
+  '/admin/savers/:id',
+  requireSuperAdmin,
+  async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const userId = String(req.params.id);
+      
+      const result = await pool.query(`
+        SELECT 
+          u.id, 
+          u.full_name, 
+          u.phone, 
+          u.email,
+          u.created_at,
+          u.status AS user_status,
+          b.name AS branch_name,
+          tm.slot_number,
+          t.name AS tenant_name,
+          k.status AS kyc_status,
+          k.legal_name,
+          k.account_name,
+          k.bank_name,
+          k.sort_code,
+          k.account_number,
+          k.selfie_object_key
+        FROM users u
+        LEFT JOIN branches b ON b.id = u.branch_id
+        LEFT JOIN tenant_memberships tm ON tm.user_id = u.id AND tm.status != 'REMOVED'
+        LEFT JOIN tenants t ON t.id = tm.tenant_id
+        LEFT JOIN kyc_submissions k ON k.user_id = u.id
+        WHERE u.id = $1 AND u.role = 'SAVER'
+        LIMIT 1
+      `, [userId]);
+      
+      const saver = result.rows[0];
+      if (!saver) {
+        throw new AppError({ code: 'NOT_FOUND', httpStatus: 404, message: 'Saver not found' });
+      }
+
+      // Generate presigned URL for the profile photo if it exists
+      let selfieUrl = null;
+      if (saver.selfie_object_key) {
+        selfieUrl = await getPresignedDownloadUrl(saver.selfie_object_key, 300);
+      }
+
+      res.json({ ok: true, data: { ...saver, selfieUrl } });
+    } catch (err) {
+      next(err);
+    }
+  }
+);
+
+router.get(
   '/admin/savers',
   requireSuperAdmin,
   async (_req: Request, res: Response, next: NextFunction) => {
     try {
       const result = await pool.query(`
-        SELECT u.*, b.name as branch_name,
-               k.selfie_object_key,
-               tm.slot_number, t.id as tenant_id
+        SELECT 
+          u.id, 
+          u.full_name, 
+          u.phone, 
+          u.email,
+          u.created_at,
+          b.name AS branch_name,
+          tm.slot_number,
+          t.name AS tenant_name,
+          COALESCE(k.status, 'NOT_SUBMITTED') AS kyc_status,
+          k.selfie_object_key
         FROM users u
         LEFT JOIN branches b ON b.id = u.branch_id
-        LEFT JOIN kyc_submissions k ON k.user_id = u.id AND k.status = 'APPROVED'
         LEFT JOIN tenant_memberships tm ON tm.user_id = u.id AND tm.status != 'REMOVED'
         LEFT JOIN tenants t ON t.id = tm.tenant_id
+        LEFT JOIN kyc_submissions k ON k.user_id = u.id
         WHERE u.role = 'SAVER'
         ORDER BY u.created_at DESC
       `);
+      
       res.json({ ok: true, data: result.rows });
     } catch (err) {
       next(err);

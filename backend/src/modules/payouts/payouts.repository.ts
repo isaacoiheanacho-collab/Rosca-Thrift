@@ -193,6 +193,53 @@ export class PayoutsRepository {
     return { intents: listResult.rows, total };
   }
 
+  /**
+   * List fee intents filtered by one or more states.
+   *
+   * Used by the Super Admin "Fee Approvals" tab to support a
+   * state-aware view:
+   *   - `['RECEIPT_UPLOADED']`              → pending approvals queue
+   *   - `['CONFIRMED']`                     → completed history
+   *   - `['PENDING', 'RECEIPT_UPLOADED', 'CONFIRMED']` → "All Fees"
+   *
+   * Ordered newest-first so a confirmation that just went through
+   * surfaces at the top of the history view immediately.
+   */
+  async listFeeIntentsByState(
+    states: FeeIntentState[],
+    options: { limit: number; offset: number },
+  ): Promise<{ intents: PlatformFeeIntentRow[]; total: number }> {
+    // Guard: an empty state array would produce `state IN ()` which
+    // Postgres rejects. Return an empty result rather than blowing up.
+    if (!states.length) {
+      return { intents: [], total: 0 };
+    }
+
+    const placeholders = states.map((_, i) => `$${i + 1}`).join(', ');
+    const params: unknown[] = [...states];
+
+    const countResult = await pool.query<{ count: string }>(
+      `SELECT COUNT(*)::text AS count FROM platform_fee_intents WHERE state IN (${placeholders})`,
+      params,
+    );
+    const total = Number(countResult.rows[0]?.count ?? '0');
+
+    params.push(options.limit);
+    const limitIdx = params.length;
+    params.push(options.offset);
+    const offsetIdx = params.length;
+
+    const listResult = await pool.query<PlatformFeeIntentRow>(
+      `SELECT * FROM platform_fee_intents
+       WHERE state IN (${placeholders})
+       ORDER BY created_at DESC
+       LIMIT $${limitIdx} OFFSET $${offsetIdx}`,
+      params,
+    );
+
+    return { intents: listResult.rows, total };
+  }
+
   // ---- Payout intents ----
 
   async findPayoutIntent(
@@ -341,6 +388,15 @@ export class PayoutsRepository {
     return result.rows;
   }
 
+  /**
+   * List payouts for a branch, optionally filtered by state.
+   *
+   * - When `state` is provided (e.g. 'CONFIRMED' for history, 'PENDING' for
+   *   pending fees, 'FAILED' for failures), the filter is applied server-side.
+   * - When `state` is omitted, all states are returned (newest first), which
+   *   is what the branch dashboard's Payouts table uses to render the full
+   *   mix of pending fees, ready-to-pay, and completed payouts in one view.
+   */
   async listPayoutsByBranch(
     branchId: string,
     options: {

@@ -12,7 +12,10 @@
  *   4. Pick a random free slot (1-12).
  *   5. Insert membership.
  *   6. If tenant now has 12 members -> mark tenant ACTIVE, set activated_at,
- *      set cycle columns, snapshot tenure rates, generate cycle-1 intents.
+ *      set cycle columns, snapshot tenure rates.
+ *      (Payout + fee intents are NOT generated here — they are generated
+ *       once the cycle's 12 contributions are confirmed, in
+ *       contributionsService.confirmContribution.)
  *   7. Audit every step.
  *
  * Idempotent: safe to call multiple times.
@@ -24,7 +27,6 @@ import { logger } from '../../logger';
 import { record } from '../audit/audit.service';
 import { usersRepository } from '../users/users.repository';
 import { tenantsRepository, type TenantRow } from './tenants.repository';
-import { rotationService } from '../payouts/rotation.service';
 import { tenureRenewalService } from './tenure-renewal.service';
 
 export interface ProvisionResult {
@@ -219,18 +221,6 @@ export class ProvisioningService {
       },
       'User provisioned to tenant'
     );
-
-    // 6. If activated, generate cycle-1 payout + fee intents (idempotent).
-    if (result.activated) {
-      try {
-        await rotationService.ensureIntentsForCycle(tenant.id, 1, 1);
-      } catch (err) {
-        logger.error(
-          { err, tenantId: tenant.id },
-          'Failed to generate cycle-1 payout intents - can be retried manually'
-        );
-      }
-    }
 
     return {
       tenantId: tenant.id,
