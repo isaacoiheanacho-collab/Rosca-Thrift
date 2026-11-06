@@ -383,11 +383,11 @@ export class ContributionsService {
 
   async listPendingForAdmin(
     branchId: string | null,
-    options: { limit: number; offset: number },
+    options: { limit: number; offset: number; tenantId?: string }, // <-- add tenantId
   ): Promise<{ intents: PendingIntentDto[]; total: number }> {
     const { intents, total } = await contributionsRepository.listPendingForBranch(
       branchId,
-      options,
+      options, // passes tenantId through — repo already accepts it
     );
 
     // Pre-fetch the receipt set so intentToDto doesn't do a lookup per row
@@ -431,7 +431,7 @@ export class ContributionsService {
 
   async listConfirmedForAdmin(
     branchId: string | null,
-    options: { limit: number; offset: number },
+    options: { limit: number; offset: number; tenantId?: string }, // <-- add tenantId
   ): Promise<{ contributions: any[]; total: number }> {
     const { contributions, total } = await contributionsRepository.listConfirmedForBranch(branchId, options);
     
