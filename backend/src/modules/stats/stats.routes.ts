@@ -4,6 +4,8 @@
  *   GET /api/super-admin/stats                    - platform-wide stats
  *   GET /api/super-admin/stats/monthly-volume     - 12-month rollup
  *   GET /api/super-admin/stats/analytics          - platform-wide analytics
+ *   GET /api/super-admin/stats/fee-revenue        - platform fee revenue by month
+ *   GET /api/super-admin/stats/fees-by-branch     - platform fee totals per branch
  *   GET /api/branch-admin/stats                   - branch-scoped stats
  *
  * All read-only. No mutations. No audit logging.
@@ -102,6 +104,39 @@ superAdminStatsRouter.get(
       next(err);
     }
   }
+);
+
+superAdminStatsRouter.get(
+  '/fee-revenue',
+  async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const monthsParam = req.query.months;
+      const months = monthsParam ? Number(monthsParam) : 12;
+      if (!Number.isInteger(months) || months < 1 || months > 24) {
+        throw new AppError({
+          code: 'STATS_BAD_MONTHS',
+          httpStatus: 400,
+          message: 'months must be an integer between 1 and 24',
+        });
+      }
+      const data = await statsService.getPlatformFeeRevenue(months);
+      res.json({ ok: true, data });
+    } catch (err) {
+      next(err);
+    }
+  },
+);
+
+superAdminStatsRouter.get(
+  '/fees-by-branch',
+  async (_req: Request, res: Response, next: NextFunction) => {
+    try {
+      const data = await statsService.getPlatformFeesByBranch();
+      res.json({ ok: true, data });
+    } catch (err) {
+      next(err);
+    }
+  },
 );
 
 // ─── Branch admin ────────────────────────────────────────────────

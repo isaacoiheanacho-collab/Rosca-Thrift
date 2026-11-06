@@ -86,6 +86,21 @@ export interface MonthlyVolumeDto {
   payoutsCount: number;
 }
 
+export interface PlatformFeeRevenueDto {
+  month: string;
+  feesPence: string;
+  feesGbp: string;
+  feesCount: number;
+}
+
+export interface BranchFeeSummaryDto {
+  branchId: string;
+  branchName: string;
+  feesPaidPence: string;
+  feesPaidGbp: string;
+  feesPaidCount: number;
+}
+
 type SharedStatsBlocks = Omit<SuperAdminStatsDto, 'branches'>;
 
 /**
@@ -200,6 +215,27 @@ export class StatsService {
 
   async getPlatformAnalytics(): Promise<PlatformAnalytics> {
     return statsRepository.platformAnalytics();
+  }
+
+  async getPlatformFeeRevenue(months = 12): Promise<PlatformFeeRevenueDto[]> {
+    const rows = await statsRepository.platformFeeRevenueByMonth(months);
+    return rows.map((r) => ({
+      month: r.month,
+      feesPence: r.feesPence.toString(),
+      feesGbp: formatPence(r.feesPence),
+      feesCount: r.feesCount,
+    }));
+  }
+
+  async getPlatformFeesByBranch(): Promise<BranchFeeSummaryDto[]> {
+    const rows = await statsRepository.platformFeesByBranch();
+    return rows.map((r) => ({
+      branchId: r.branchId,
+      branchName: r.branchName,
+      feesPaidPence: r.feesPaidPence.toString(),
+      feesPaidGbp: formatPence(r.feesPaidPence),
+      feesPaidCount: r.feesPaidCount,
+    }));
   }
 }
 

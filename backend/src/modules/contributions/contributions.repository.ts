@@ -207,10 +207,12 @@ export class ContributionsRepository {
    * Pending verification queue: PENDING or LATE intents with an uploaded
    * receipt but no contribution yet. If branchId is null, returns all
    * branches (super admin scope).
+   *
+   * Optionally filtered by tenantId.
    */
   async listPendingForBranch(
     branchId: string | null,
-    options: { limit: number; offset: number },
+    options: { limit: number; offset: number; tenantId?: string },
   ): Promise<{ intents: ContributionIntentRow[]; total: number }> {
     const conditions: string[] = [
       `i.state IN ('PENDING', 'LATE')`,
@@ -222,6 +224,11 @@ export class ContributionsRepository {
     if (branchId) {
       params.push(branchId);
       conditions.push(`i.branch_id = $${params.length}`);
+    }
+
+    if (options.tenantId) {
+      params.push(options.tenantId);
+      conditions.push(`i.tenant_id = $${params.length}`);
     }
 
     const where = `WHERE ${conditions.join(' AND ')}`;
@@ -250,10 +257,12 @@ export class ContributionsRepository {
 
   /**
    * List confirmed contributions for a branch (History view).
+   *
+   * Optionally filtered by tenantId.
    */
   async listConfirmedForBranch(
     branchId: string | null,
-    options: { limit: number; offset: number },
+    options: { limit: number; offset: number; tenantId?: string },
   ): Promise<{ contributions: any[]; total: number }> {
     const conditions: string[] = [`c.branch_id IS NOT NULL`];
     const params: unknown[] = [];
@@ -261,6 +270,11 @@ export class ContributionsRepository {
     if (branchId) {
       params.push(branchId);
       conditions.push(`c.branch_id = $${params.length}`);
+    }
+
+    if (options.tenantId) {
+      params.push(options.tenantId);
+      conditions.push(`c.tenant_id = $${params.length}`);
     }
 
     const where = `WHERE ${conditions.join(' AND ')}`;

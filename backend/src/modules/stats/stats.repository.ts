@@ -87,6 +87,19 @@ export interface PlatformAnalytics {
   recentActivity: Array<{ type: string; amountPence: bigint; name: string; reference: string; date: Date }>;
 }
 
+export interface PlatformFeeRevenueRow {
+  month: string;            // 'YYYY-MM'
+  feesPence: bigint;
+  feesCount: number;
+}
+
+export interface BranchFeeSummaryRow {
+  branchId: string;
+  branchName: string;
+  feesPaidPence: bigint;
+  feesPaidCount: number;
+}
+
 export class StatsRepository {
   // ─────────────────────────────────────────────────────────────
   // Platform-wide
@@ -356,6 +369,75 @@ export class StatsRepository {
         date: a.date,
       })),
     };
+  }
+
+  /** Platform fee revenue by month (last N months, confirmed fees only). */
+  async platformFeeRevenueByMonth(months = 12): Promise<PlatformFeeRevenueRow[]> {
+    const result = await pool.query<{
+      month: string;
+      fees_pence: string;
+      fees_count: string;
+    }>(
+      `WITH months AS (
+         SELECT generate_series(
+           date_trunc('month', NOW() - ($1::int - 1) * INTERVAL '1 month'),
+           date_trunc('month', NOW()),
+           INTERVAL '1 month'
+         ) AS month
+       ),
+       f AS (
+         SELECT date_trunc('month', confirmed_at) AS month,
+                SUM(amount) AS pence,
+                COUNT(*) AS count
+         FROM platform_fee_intents
+         WHERE state = 'CONFIRMED'
+           AND confirmed_at >= date_trunc('month', NOW() - ($1::int - 1) * INTERVAL '1 month')
+         GROUP BY 1
+       )
+       SELECT
+         to_char(m.month, 'YYYY-MM') AS month,
+         COALESCE(f.pence, 0)::text AS fees_pence,
+         COALESCE(f.count, 0)::text AS fees_count
+       FROM months m
+       LEFT JOIN f ON f.month = m.month
+       ORDER BY m.month ASC`,
+      [months],
+    );
+
+    return result.rows.map((r) => ({
+      month: r.month,
+      feesPence: BigInt(r.fees_pence),
+      feesCount: Number(r.fees_count),
+    }));
+  }
+
+  /** Per-branch totals of confirmed platform fees (one row per branch). */
+  async platformFeesByBranch(): Promise<BranchFeeSummaryRow[]> {
+    const result = await pool.query<{
+      branch_id: string;
+      branch_name: string;
+      fees_pence: string;
+      fees_count: string;
+    }>(
+      `SELECT
+         b.id    AS branch_id,
+         b.name  AS branch_name,
+         COALESCE(SUM(f.amount), 0)::text AS fees_pence,
+         COALESCE(COUNT(f.id), 0)::text   AS fees_count
+       FROM branches b
+       LEFT JOIN platform_fee_intents f
+         ON f.branch_id = b.id
+         AND f.state = 'CONFIRMED'
+       GROUP BY b.id, b.name
+       ORDER BY COALESCE(SUM(f.amount), 0) DESC`,
+    );
+
+    return result.rows.map((r) => ({
+      branchId: r.branch_id,
+      branchName: r.branch_name,
+      feesPaidPence: BigInt(r.fees_pence),
+      feesPaidCount: Number(r.fees_count),
+    }));
   }
 
   // ─────────────────────────────────────────────────────────────

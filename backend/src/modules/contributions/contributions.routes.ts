@@ -159,6 +159,8 @@ branchAdminContributionsRouter.get(
         limit: number;
         offset: number;
         status: 'PENDING' | 'CONFIRMED';
+        tenantId?: string;
+        cycle?: number;
       };
       const user = req.user!;
       const branchFilter = user.role === 'BRANCH_ADMIN' ? user.branchId : null;
@@ -167,12 +169,14 @@ branchAdminContributionsRouter.get(
         const result = await contributionsService.listConfirmedForAdmin(branchFilter, {
           limit: q.limit,
           offset: q.offset,
+          tenantId: q.tenantId,
         });
         res.json({ ok: true, data: { ...result, limit: q.limit, offset: q.offset } });
       } else {
         const result = await contributionsService.listPendingForAdmin(branchFilter, {
           limit: q.limit,
           offset: q.offset,
+          tenantId: q.tenantId,
         });
         res.json({ ok: true, data: { ...result, limit: q.limit, offset: q.offset } });
       }
