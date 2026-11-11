@@ -80,7 +80,7 @@ export async function sendWebPush(
 
   try {
     await webpush.sendNotification(pushSub, body, {
-      TTL: 5 * 60, // Expire stale transactional alerts after five minutes.
+      TTL: 60 * 60 * 24, // Keep important transactional alerts deliverable for 24 hours.
       urgency: 'high', // Request prompt delivery on Android push services.
     });
     return { ok: true };
