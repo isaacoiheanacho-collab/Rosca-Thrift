@@ -255,14 +255,18 @@ export class NotificationsService {
     contributionId: string;
   }): Promise<void> {
     const amount = formatPence(params.amount);
-    await this.notifyTenant({
+    const userIds = await notificationsRepository.listTenantMemberUserIds(params.tenantId);
+    await this.notifyMany(userIds.map((userId) => ({
+      userId,
       tenantId: params.tenantId,
       branchId: params.branchId,
       kind: 'CONTRIBUTION_CONFIRMED',
-      title: 'Contribution confirmed',
-      body: `${params.saverName} contributed ${amount} to cycle ${params.cycle}.`,
+      title: userId === params.saverUserId ? 'Your contribution is confirmed' : 'Contribution confirmed',
+      body: userId === params.saverUserId
+        ? `Your receipt for cycle ${params.cycle} has been verified and approved. Your contribution of ${amount} is confirmed.`
+        : `${params.saverName}'s contribution of ${amount} for cycle ${params.cycle} has been verified and confirmed.`,
       metadata: { contributionId: params.contributionId, cycle: params.cycle },
-    });
+    })));
   }
 
   async notifyContributionRejected(params: {
@@ -272,15 +276,21 @@ export class NotificationsService {
     saverName: string;
     cycle: number;
     intentId: string;
+    reason: string;
   }): Promise<void> {
-    await this.notifyTenant({
+    const userIds = await notificationsRepository.listTenantMemberUserIds(params.tenantId);
+    const reasonText = params.reason.trim();
+    await this.notifyMany(userIds.map((userId) => ({
+      userId,
       tenantId: params.tenantId,
       branchId: params.branchId,
       kind: 'CONTRIBUTION_REJECTED',
-      title: 'Contribution could not be verified',
-      body: `${params.saverName}'s contribution for cycle ${params.cycle} could not be verified. Please check the reference and try again, or contact your branch admin.`,
-      metadata: { intentId: params.intentId, cycle: params.cycle },
-    });
+      title: userId === params.saverUserId ? 'Your receipt was not approved' : 'Contribution receipt declined',
+      body: userId === params.saverUserId
+        ? `Your receipt for cycle ${params.cycle} was not approved.${reasonText ? ` Reason: ${reasonText}` : ' Please contact your branch admin for details.'}`
+        : `${params.saverName}'s receipt for cycle ${params.cycle} was not approved.`,
+      metadata: { intentId: params.intentId, cycle: params.cycle, reason: reasonText },
+    })));
   }
 
   async notifyDepositReminder(params: {
