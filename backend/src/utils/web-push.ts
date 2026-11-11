@@ -80,8 +80,8 @@ export async function sendWebPush(
 
   try {
     await webpush.sendNotification(pushSub, body, {
-      TTL: 60 * 60 * 24, // 24h — the push service will deliver when the device comes online
-      urgency: 'normal',
+      TTL: 5 * 60, // Expire stale transactional alerts after five minutes.
+      urgency: 'high', // Request prompt delivery on Android push services.
     });
     return { ok: true };
   } catch (err) {
