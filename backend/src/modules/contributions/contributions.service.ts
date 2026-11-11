@@ -383,7 +383,7 @@ export class ContributionsService {
 
   async listPendingForAdmin(
     branchId: string | null,
-    options: { limit: number; offset: number; tenantId?: string; cycle?: number },
+    options: { limit: number; offset: number; tenantId?: string }, // <-- add tenantId
   ): Promise<{ intents: PendingIntentDto[]; total: number }> {
     const { intents, total } = await contributionsRepository.listPendingForBranch(
       branchId,
@@ -431,7 +431,7 @@ export class ContributionsService {
 
   async listConfirmedForAdmin(
     branchId: string | null,
-    options: { limit: number; offset: number; tenantId?: string; cycle?: number },
+    options: { limit: number; offset: number; tenantId?: string }, // <-- add tenantId
   ): Promise<{ contributions: any[]; total: number }> {
     const { contributions, total } = await contributionsRepository.listConfirmedForBranch(branchId, options);
     
@@ -442,7 +442,6 @@ export class ContributionsService {
       tenantName: c.tenant_name,
       userName: c.user_name,
       cycle: c.cycle,
-      tenure: c.tenure,
       amountPence: c.amount.toString(),
       confirmedAt: c.confirmed_at.toISOString(),
     }));
