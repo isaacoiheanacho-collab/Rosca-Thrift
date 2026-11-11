@@ -69,6 +69,7 @@ export class RealtimeService {
           auth: sub.auth,
         },
         {
+          id: notification.id,
           title: notification.title,
           body: notification.body,
           url: '/notifications',
