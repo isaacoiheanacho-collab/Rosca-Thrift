@@ -681,6 +681,7 @@ export class ContributionsService {
         saverName: saver?.full_name ?? 'A member',
         cycle: intent.cycle,
         intentId: intent.id,
+        reason,
       });
     } catch (err) {
       logger.error({ err, intentId: intent.id }, 'Contribution rejected notification failed');
