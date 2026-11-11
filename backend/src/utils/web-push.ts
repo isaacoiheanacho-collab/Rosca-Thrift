@@ -41,6 +41,8 @@ export function ensureWebPushInitialised(): void {
 }
 
 export interface PushPayload {
+  /** Stable notification ID used to distinguish background push alerts. */
+  id?: string;
   title: string;
   body: string;
   /** Optional deep link / metadata the service worker can use. */
