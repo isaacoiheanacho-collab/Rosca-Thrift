@@ -221,14 +221,28 @@ export class NotificationsService {
     cycle: number;
     intentId: string;
   }): Promise<void> {
-    await this.notifyBranchAdmins({
-      branchId: params.branchId,
-      tenantId: params.tenantId,
+    const notification = {
       kind: 'CONTRIBUTION_UPLOADED',
       title: 'Contribution receipt uploaded',
       body: `${params.saverName} uploaded a receipt for cycle ${params.cycle}. Please verify.`,
       metadata: { intentId: params.intentId, cycle: params.cycle },
-    });
+    };
+
+    // Notify branch admins who must verify the receipt, and the other
+    // members of the same circle so they can see the contribution activity.
+    const [adminIds, memberIds] = await Promise.all([
+      notificationsRepository.listBranchAdminUserIds(params.branchId),
+      notificationsRepository.listTenantMemberUserIds(params.tenantId),
+    ]);
+    const recipients = [...new Set([...adminIds, ...memberIds])]
+      .filter((userId) => userId !== params.saverUserId);
+
+    await this.notifyMany(recipients.map((userId) => ({
+      userId,
+      tenantId: params.tenantId,
+      branchId: params.branchId,
+      ...notification,
+    })));
   }
 
   async notifyContributionConfirmed(params: {
