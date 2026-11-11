@@ -212,7 +212,7 @@ export class ContributionsRepository {
    */
   async listPendingForBranch(
     branchId: string | null,
-    options: { limit: number; offset: number; tenantId?: string },
+    options: { limit: number; offset: number; tenantId?: string; cycle?: number },
   ): Promise<{ intents: ContributionIntentRow[]; total: number }> {
     const conditions: string[] = [
       `i.state IN ('PENDING', 'LATE')`,
@@ -228,7 +228,11 @@ export class ContributionsRepository {
 
     if (options.tenantId) {
       params.push(options.tenantId);
-      conditions.push(`i.tenant_id = $${params.length}`);
+      conditions.push(`i.tenant_id = ${params.length}`);
+    }
+    if (options.cycle) {
+      params.push(options.cycle);
+      conditions.push(`i.cycle = ${params.length}`);
     }
 
     const where = `WHERE ${conditions.join(' AND ')}`;
@@ -262,7 +266,7 @@ export class ContributionsRepository {
    */
   async listConfirmedForBranch(
     branchId: string | null,
-    options: { limit: number; offset: number; tenantId?: string },
+    options: { limit: number; offset: number; tenantId?: string; cycle?: number },
   ): Promise<{ contributions: any[]; total: number }> {
     const conditions: string[] = [`c.branch_id IS NOT NULL`];
     const params: unknown[] = [];
@@ -274,7 +278,11 @@ export class ContributionsRepository {
 
     if (options.tenantId) {
       params.push(options.tenantId);
-      conditions.push(`c.tenant_id = $${params.length}`);
+      conditions.push(`c.tenant_id = ${params.length}`);
+    }
+    if (options.cycle) {
+      params.push(options.cycle);
+      conditions.push(`c.cycle = ${params.length}`);
     }
 
     const where = `WHERE ${conditions.join(' AND ')}`;
