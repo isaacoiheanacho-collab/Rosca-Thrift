@@ -170,7 +170,6 @@ branchAdminContributionsRouter.get(
           limit: q.limit,
           offset: q.offset,
           tenantId: q.tenantId,
-          cycle: q.cycle,
         });
         res.json({ ok: true, data: { ...result, limit: q.limit, offset: q.offset } });
       } else {
@@ -178,7 +177,6 @@ branchAdminContributionsRouter.get(
           limit: q.limit,
           offset: q.offset,
           tenantId: q.tenantId,
-          cycle: q.cycle,
         });
         res.json({ ok: true, data: { ...result, limit: q.limit, offset: q.offset } });
       }
