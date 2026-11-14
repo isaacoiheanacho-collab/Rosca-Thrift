@@ -298,16 +298,19 @@ export class NotificationsService {
     branchId: string;
     cycle: number;
     deadlineAt: Date;
+    userIds: string[];
   }): Promise<void> {
+    if (params.userIds.length === 0) return;
     const deadline = params.deadlineAt.toISOString().slice(0, 10);
-    await this.notifyTenant({
+    await this.notifyMany(params.userIds.map((userId) => ({
+      userId,
       tenantId: params.tenantId,
       branchId: params.branchId,
       kind: 'DEPOSIT_REMINDER',
       title: 'Contribution reminder',
       body: `Cycle ${params.cycle} contributions are due. Please pay by ${deadline}.`,
       metadata: { cycle: params.cycle, deadlineAt: params.deadlineAt.toISOString() },
-    });
+    })));
   }
 
   async notifyFeeReceiptUploaded(params: {
