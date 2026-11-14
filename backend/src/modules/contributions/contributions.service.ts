@@ -793,6 +793,53 @@ export class ContributionsService {
    * the current cycle contribution. Confirmed, exempt and receipt-uploaded
    * members are excluded. SMS delivery is best-effort and uses TextBee.
    */
+  /**
+   * Read-only preview of the recipients eligible for a manual reminder.
+   * Uses the same repository query as sendDepositReminder so the count
+   * reflects the exact current-cycle eligibility rules.
+   */
+  async getDepositReminderPreview(tenantId: string): Promise<{
+    eligibleCount: number;
+    canSend: boolean;
+    reason: 'TENANT_NOT_ACTIVE' | 'NO_CONTRIBUTION_DEADLINE' | 'NO_OUTSTANDING_MEMBERS' | null;
+    tenantStatus: string;
+    currentTenure: number;
+    currentCycle: number;
+    deadlineAt: string | null;
+  }> {
+    const tenant = await tenantsRepository.findById(tenantId);
+    if (!tenant) throw new NotFoundError('Tenant');
+
+    const base = {
+      tenantStatus: tenant.status,
+      currentTenure: tenant.current_tenure,
+      currentCycle: tenant.current_cycle,
+      deadlineAt: tenant.cycle_contribution_deadline_at?.toISOString() ?? null,
+    };
+
+    if (tenant.status !== 'ACTIVE') {
+      return { ...base, eligibleCount: 0, canSend: false, reason: 'TENANT_NOT_ACTIVE' };
+    }
+
+    if (!tenant.cycle_contribution_deadline_at) {
+      return { ...base, eligibleCount: 0, canSend: false, reason: 'NO_CONTRIBUTION_DEADLINE' };
+    }
+
+    const eligibleMembers = await contributionsRepository.listMembersNeedingReminder(
+      tenantId,
+      tenant.current_tenure,
+      tenant.current_cycle,
+    );
+    const eligibleCount = eligibleMembers.length;
+
+    return {
+      ...base,
+      eligibleCount,
+      canSend: eligibleCount > 0,
+      reason: eligibleCount > 0 ? null : 'NO_OUTSTANDING_MEMBERS',
+    };
+  }
+
   async sendDepositReminder(
     tenantId: string,
     actorId: string,
