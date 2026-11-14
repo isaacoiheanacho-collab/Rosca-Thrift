@@ -833,7 +833,7 @@ export class ContributionsService {
 
     const smsResults = await Promise.all(
       eligibleMembers.map(async (member) => {
-        const firstName = member.full_name.trim().split(/\\s+/)[0] || 'there';
+        const firstName = member.full_name.trim().split(/\s+/)[0] || 'there';
         const message =
           `ROSCA Thrift: Hello ${firstName}, your cycle ${tenant.current_cycle} contribution is still outstanding. Please make payment to your circle's designated collection account by ${deadline.toISOString().slice(0, 10)}. If you have already paid, contact your Branch Admin. This is a service reminder.`;
         return sendSms(member.phone, message);
