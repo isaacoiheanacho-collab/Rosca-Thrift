@@ -107,6 +107,53 @@ export interface TenantReceiptRow {
 }
 
 export class ContributionsRepository {
+  /**
+   * Active, phone-verified members who still owe the current cycle contribution.
+   * Members with a confirmed contribution, an uploaded receipt awaiting review,
+   * or an EXEMPT intent are deliberately excluded from reminders.
+   */
+  async listMembersNeedingReminder(
+    tenantId: string,
+    tenure: number,
+    cycle: number,
+  ): Promise<Array<{ user_id: string; full_name: string; phone: string; slot_number: number }>> {
+    const result = await pool.query<{
+      user_id: string;
+      full_name: string;
+      phone: string;
+      slot_number: number;
+    }>(
+      `SELECT tm.user_id, u.full_name, u.phone, tm.slot_number
+       FROM tenant_memberships tm
+       INNER JOIN users u ON u.id = tm.user_id
+       LEFT JOIN contribution_intents i
+         ON i.tenant_id = tm.tenant_id
+        AND i.user_id = tm.user_id
+        AND i.tenure = $2
+        AND i.cycle = $3
+       WHERE tm.tenant_id = $1
+         AND tm.status <> 'REMOVED'
+         AND u.status = 'VERIFIED'
+         AND u.phone_verified_at IS NOT NULL
+         AND (i.id IS NULL OR i.state NOT IN ('EXEMPT', 'CONFIRMED'))
+         AND NOT EXISTS (
+           SELECT 1 FROM contributions c
+           WHERE c.tenant_id = tm.tenant_id
+             AND c.user_id = tm.user_id
+             AND c.tenure = $2
+             AND c.cycle = $3
+         )
+         AND NOT EXISTS (
+           SELECT 1 FROM receipts r
+           WHERE r.intent_id = i.id
+             AND r.purpose = 'CONTRIBUTION'
+         )
+       ORDER BY tm.slot_number ASC`,
+      [tenantId, tenure, cycle],
+    );
+    return result.rows;
+  }
+
   // ---- Intents ----
 
   async findIntentByUserCycle(

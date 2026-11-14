@@ -16,6 +16,7 @@ import { ledgerService } from '../ledger/ledger.service';
 import { usersRepository } from '../users/users.repository';
 import { notificationsService } from '../notifications/notifications.service';
 import { rotationService } from '../payouts/rotation.service';
+import { sendSms } from '../../utils/sms';
 import {
   contributionsRepository,
   type ContributionIntentRow,
@@ -788,14 +789,15 @@ export class ContributionsService {
   }
 
   /**
-   * Branch admin fires a manual reminder to all active members of a tenant.
-   * Rate-limited to once per (tenant, cycle) per admin session.
+   * Branch admin manually reminds active, verified members who still owe
+   * the current cycle contribution. Confirmed, exempt and receipt-uploaded
+   * members are excluded. SMS delivery is best-effort and uses TextBee.
    */
   async sendDepositReminder(
     tenantId: string,
     actorId: string,
     meta: RequestMeta,
-  ): Promise<{ sent: number }> {
+  ): Promise<{ sent: number; smsSent: number; smsFailed: number; skipped: number }> {
     const tenant = await tenantsRepository.findById(tenantId);
     if (!tenant) throw new NotFoundError('Tenant');
 
@@ -806,17 +808,40 @@ export class ContributionsService {
       );
     }
 
-    const members = await tenantsRepository.findMembershipsByTenant(tenantId);
-    const deadline =
-      tenant.cycle_contribution_deadline_at ??
-      new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
+    const deadline = tenant.cycle_contribution_deadline_at;
+    if (!deadline) {
+      throw new ConflictError(
+        'This tenant has no contribution deadline configured for the current cycle',
+        'REMINDER_DEADLINE_MISSING',
+      );
+    }
 
+    const eligibleMembers = await contributionsRepository.listMembersNeedingReminder(
+      tenantId,
+      tenant.current_tenure,
+      tenant.current_cycle,
+    );
+
+    const userIds = eligibleMembers.map((member) => member.user_id);
     await notificationsService.notifyDepositReminder({
       tenantId,
       branchId: tenant.branch_id,
       cycle: tenant.current_cycle,
       deadlineAt: deadline,
+      userIds,
     });
+
+    const smsResults = await Promise.all(
+      eligibleMembers.map(async (member) => {
+        const firstName = member.full_name.trim().split(/\s+/)[0] || 'there';
+        const message =
+          `ROSCA Thrift: Hello ${firstName}, your cycle ${tenant.current_cycle} contribution is still outstanding. Please make payment to your circle's designated collection account by ${deadline.toISOString().slice(0, 10)}. If you have already paid, contact your Branch Admin. This is a service reminder.`;
+        return sendSms(member.phone, message);
+      }),
+    );
+
+    const smsSent = smsResults.filter((result) => result.ok).length;
+    const smsFailed = smsResults.length - smsSent;
 
     await record({
       actorId,
@@ -825,15 +850,33 @@ export class ContributionsService {
       entityId: tenantId,
       ipAddress: meta.ipAddress,
       userAgent: meta.userAgent,
-      metadata: { cycle: tenant.current_cycle, memberCount: members.length },
+      metadata: {
+        cycle: tenant.current_cycle,
+        eligibleMemberCount: eligibleMembers.length,
+        inAppRecipients: userIds.length,
+        smsSent,
+        smsFailed,
+      },
     });
 
     logger.info(
-      { tenantId, cycle: tenant.current_cycle, members: members.length, actorId },
-      'Deposit reminder sent',
+      {
+        tenantId,
+        cycle: tenant.current_cycle,
+        eligibleMembers: eligibleMembers.length,
+        smsSent,
+        smsFailed,
+        actorId,
+      },
+      'Manual contribution reminders processed',
     );
 
-    return { sent: members.length };
+    return {
+      sent: eligibleMembers.length,
+      smsSent,
+      smsFailed,
+      skipped: (await tenantsRepository.findMembershipsByTenant(tenantId)).length - eligibleMembers.length,
+    };
   }
 }
 
