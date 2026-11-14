@@ -248,6 +248,26 @@ branchAdminContributionsRouter.get(
   },
 );
 
+branchAdminContributionsRouter.get(
+  '/tenants/:tenantId/reminder-preview',
+  async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const tenantId = String(req.params.tenantId);
+      const tenant = await tenantsRepository.findById(tenantId);
+      if (!tenant) {
+        throw new NotFoundError('Tenant');
+      }
+      if (req.user!.role === 'BRANCH_ADMIN' && tenant.branch_id !== req.user!.branchId) {
+        throw new AppError({ code: 'AUTH_BRANCH_SCOPE', httpStatus: 403, message: 'Not permitted' });
+      }
+      const result = await contributionsService.getDepositReminderPreview(tenantId);
+      res.json({ ok: true, data: result });
+    } catch (err) {
+      next(err);
+    }
+  },
+);
+
 branchAdminContributionsRouter.post(
   '/tenants/:tenantId/remind',
   validate({ query: RemindQuerySchema }),
