@@ -135,7 +135,7 @@ export class ContributionsRepository {
          AND tm.status <> 'REMOVED'
          AND u.status = 'VERIFIED'
          AND u.phone_verified_at IS NOT NULL
-         AND (i.id IS NULL OR i.state <> 'EXEMPT')
+         AND (i.id IS NULL OR i.state NOT IN ('EXEMPT', 'CONFIRMED'))
          AND NOT EXISTS (
            SELECT 1 FROM contributions c
            WHERE c.tenant_id = tm.tenant_id
