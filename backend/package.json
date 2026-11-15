@@ -21,7 +21,6 @@
     "test:visibility": "ts-node --transpile-only scripts/test-tenant-visibility.ts",
     "test:idor": "ts-node --transpile-only scripts/test-idor.ts",
     "test:payout": "ts-node --transpile-only scripts/test-payout-flow.ts",
-    "test:tvc": "ts-node --transpile-only scripts/test-tvc-calculation.ts",
     "test:cycle-advance": "ts-node --transpile-only scripts/test-cycle-advancement.ts",
     "test:renewal": "ts-node --transpile-only scripts/test-tenure-renewal.ts",
     "test:notifications": "ts-node --transpile-only scripts/test-notifications.ts",

@@ -78,8 +78,6 @@ tenantsRouter.get('/me', requireAuth, async (req: Request, res: Response, next: 
           potAfterTvcPence: payoutIntent.pot_after_tvc.toString(),
           platformFeePence: payoutIntent.platform_fee.toString(),
           netAmountPence: payoutIntent.net_amount.toString(),
-          tvcRateNumerator: payoutIntent.tvc_rate_numerator,
-          tvcRateDenominator: payoutIntent.tvc_rate_denominator,
           state: payoutIntent.state,
           recipientUserId: payoutIntent.recipient_user_id,
           recipientName: recipient?.full_name || 'Unknown',
