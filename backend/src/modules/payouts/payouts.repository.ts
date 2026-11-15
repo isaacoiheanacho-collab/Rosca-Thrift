@@ -47,8 +47,6 @@ export interface PayoutIntentRow {
   net_amount: bigint;
   currency: string;
   tvc_bps: number;
-  tvc_rate_numerator: number;
-  tvc_rate_denominator: number;
   fee_bps: number;
   state: PayoutIntentState;
   fee_confirmed_by: string | null;
@@ -281,8 +279,6 @@ export class PayoutsRepository {
       platformFee: bigint;
       netAmount: bigint;
       tvcBps: number;
-      tvcRateNumerator: number;
-      tvcRateDenominator: number;
       feeBps: number;
       feeIntentId: string;
       retryOfPayoutId?: string | null;
@@ -296,9 +292,9 @@ export class PayoutsRepository {
          (tenant_id, branch_id, tenure, cycle,
           recipient_user_id, recipient_membership_id, recipient_slot,
           reference, gross_amount, tvc_adjustment, pot_after_tvc,
-          platform_fee, net_amount, tvc_bps, tvc_rate_numerator, tvc_rate_denominator, fee_bps, fee_intent_id,
+          platform_fee, net_amount, tvc_bps, fee_bps, fee_intent_id,
           retry_of_payout_id, retry_count)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18)
        RETURNING *`,
       [
         data.tenantId,
@@ -315,8 +311,6 @@ export class PayoutsRepository {
         data.platformFee,
         data.netAmount,
         data.tvcBps,
-        data.tvcRateNumerator,
-        data.tvcRateDenominator,
         data.feeBps,
         data.feeIntentId,
         data.retryOfPayoutId ?? null,
