@@ -199,7 +199,7 @@ async function main(): Promise<number> {
     `/api/branch-admin/payouts/fees/${cycle1Payout.feeIntentId}/receipt?branchId=${branchId}`,
     superToken,
     {
-      claimedAmount: '17835',
+      claimedAmount: '17250',
       claimedReference: 'FEEfee12301',
       claimedSenderName: 'Payout Test Branch',
     },
