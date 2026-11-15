@@ -23,16 +23,20 @@ export interface TvcCalculation {
  *
  * @param grossPotPence    The gross pool (e.g. £12,000 = 1_200_000n pence)
  * @param position         The slot number (1-12) — also the cycle number
- * @param tvcAnnualBps     The annual TVC rate in basis points (e.g. 200 = 2% p.a.)
+ * @param tvcAnnualBps     The annual TVC rate in basis points (e.g. 909 = 9.09% p.a.)
  */
 export function calculateTvc(
   grossPotPence: bigint,
   position: number,
   tvcAnnualBps: number,
 ): TvcCalculation {
-  if (position < 1 || position > 12) {
-    throw new Error(`Invalid position: ${position}. Must be 1-12.`);
+  if (!Number.isInteger(position) || position < 1 || position > 12) {
+    throw new Error(`Invalid position: ${position}. Must be an integer from 1 to 12.`);
   }
+  if (!Number.isSafeInteger(tvcAnnualBps) || tvcAnnualBps < 0 || tvcAnnualBps > 10000) {
+    throw new Error('TVC annual rate must be an integer between 0 and 10000 basis points.');
+  }
+  if (grossPotPence <= 0n) throw new Error('Gross pot must be greater than zero.');
 
   // Monthly rate = annual BPS / 10000 / 12
   // We work in BPS * 100 to preserve integer math:
@@ -70,6 +74,10 @@ export function calculateFee(
   potAfterTvcPence: bigint,
   feeBps: number,
 ): { fee: bigint; net: bigint; rateBps: number } {
+  if (potAfterTvcPence <= 0n) throw new Error('Post-TVC pot must be greater than zero.');
+  if (!Number.isInteger(feeBps) || feeBps < 0 || feeBps > 10000) {
+    throw new Error('Fee rate must be an integer between 0 and 10000 basis points.');
+  }
   const numerator = potAfterTvcPence * BigInt(feeBps);
   const denominator = 10000n;
   const half = denominator / 2n;
