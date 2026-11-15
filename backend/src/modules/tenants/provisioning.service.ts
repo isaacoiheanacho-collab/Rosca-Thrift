@@ -172,11 +172,9 @@ export class ProvisioningService {
                cycle_payout_at = NOW() + INTERVAL '30 days',
                current_tenure_fee_bps = $2,
                current_tenure_tvc_bps = $3,
-               current_tenure_tvc_rate_numerator = $4,
-               current_tenure_tvc_rate_denominator = $5,
                tenure_started_at = NOW()
            WHERE id = $1 AND status = 'FILLING'`,
-          [tenant!.id, env.PLATFORM_FEE_BPS, Math.round(env.TVC_ANNUAL_RATE_NUMERATOR / env.TVC_ANNUAL_RATE_DENOMINATOR * 10000), env.TVC_ANNUAL_RATE_NUMERATOR, env.TVC_ANNUAL_RATE_DENOMINATOR]
+          [tenant!.id, env.PLATFORM_FEE_BPS, env.TVC_ANNUAL_BPS]
         );
         activated = true;
       }
@@ -202,8 +200,7 @@ export class ProvisioningService {
             metadata: {
               memberCount,
               feeBps: env.PLATFORM_FEE_BPS,
-              tvcRateNumerator: env.TVC_ANNUAL_RATE_NUMERATOR,
-              tvcRateDenominator: env.TVC_ANNUAL_RATE_DENOMINATOR,
+              tvcBps: env.TVC_ANNUAL_BPS,
             },
           },
           tx
