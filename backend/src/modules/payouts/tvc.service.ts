@@ -23,10 +23,10 @@ export function calculateTvc(
     throw new Error(`Invalid position: ${position}. Must be an integer from 1-12.`);
   }
   if (
-    !Number.isSafeInteger(annualRateNumerator) || annualRateNumerator <= 0 ||
+    !Number.isSafeInteger(annualRateNumerator) || annualRateNumerator < 0 ||
     !Number.isSafeInteger(annualRateDenominator) || annualRateDenominator <= 0
   ) {
-    throw new Error('TVC rate numerator and denominator must be positive safe integers.');
+    throw new Error('TVC rate numerator must be non-negative and denominator must be a positive safe integer.');
   }
   if (grossPotPence <= 0n) throw new Error('Gross pot must be greater than zero.');
 
