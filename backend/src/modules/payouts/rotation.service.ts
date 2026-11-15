@@ -118,6 +118,8 @@ export class RotationService {
           platformFee: fee.fee,
           netAmount: fee.net,
           tvcBps: tenant.current_tenure_tvc_bps,
+          tvcRateNumerator: tenant.current_tenure_tvc_rate_numerator,
+          tvcRateDenominator: tenant.current_tenure_tvc_rate_denominator,
           feeBps: tenant.current_tenure_fee_bps,
           feeIntentId: feeIntent.id,
         },
