@@ -78,6 +78,10 @@ export function calculateFee(
   if (!Number.isInteger(feeBps) || feeBps < 0 || feeBps > 10000) {
     throw new Error('Fee rate must be an integer between 0 and 10000 basis points.');
   }
+  if (potAfterTvcPence <= 0n) throw new Error('Post-TVC pot must be greater than zero.');
+  if (!Number.isInteger(feeBps) || feeBps < 0 || feeBps > 10000) {
+    throw new Error('Fee rate must be an integer between 0 and 10000 basis points.');
+  }
   const numerator = potAfterTvcPence * BigInt(feeBps);
   const denominator = 10000n;
   const half = denominator / 2n;
