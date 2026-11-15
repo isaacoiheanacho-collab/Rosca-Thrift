@@ -69,6 +69,8 @@ export interface PayoutIntentDto {
   netAmountGbp: string;
   currency: string;
   tvcBps: number;
+  tvcRateNumerator: number;
+  tvcRateDenominator: number;
   feeBps: number;
   state: PayoutIntentState;
   feeConfirmedAt: string | null;
@@ -184,6 +186,8 @@ async function payoutToDto(row: PayoutIntentRow): Promise<PayoutIntentDto> {
     netAmountGbp: (Number(row.net_amount) / 100).toFixed(2),
     currency: row.currency,
     tvcBps: row.tvc_bps,
+    tvcRateNumerator: row.tvc_rate_numerator,
+    tvcRateDenominator: row.tvc_rate_denominator,
     feeBps: row.fee_bps,
     state: row.state,
     feeConfirmedAt: row.fee_confirmed_at?.toISOString() ?? null,
@@ -1091,6 +1095,8 @@ export class PayoutsService {
           platformFee: original.platform_fee,
           netAmount: original.net_amount,
           tvcBps: original.tvc_bps,
+          tvcRateNumerator: original.tvc_rate_numerator,
+          tvcRateDenominator: original.tvc_rate_denominator,
           feeBps: original.fee_bps,
           feeIntentId,
           retryOfPayoutId: original.id,

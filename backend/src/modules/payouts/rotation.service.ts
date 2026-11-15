@@ -82,7 +82,7 @@ export class RotationService {
 
     // Compute amounts
     const gross = BigInt(env.CONTRIBUTION_PENCE) * BigInt(CIRCLE_SIZE);
-    const tvc = calculateTvc(gross, cycle, tenant.current_tenure_tvc_bps);
+    const tvc = calculateTvc(gross, cycle, tenant.current_tenure_tvc_rate_numerator, tenant.current_tenure_tvc_rate_denominator);
     const fee = calculateFee(tvc.potAfterTvc, tenant.current_tenure_fee_bps);
 
     const payoutReference = buildPayoutReference(tenantId, cycle, tenure, cycle);
@@ -118,6 +118,8 @@ export class RotationService {
           platformFee: fee.fee,
           netAmount: fee.net,
           tvcBps: tenant.current_tenure_tvc_bps,
+          tvcRateNumerator: tenant.current_tenure_tvc_rate_numerator,
+          tvcRateDenominator: tenant.current_tenure_tvc_rate_denominator,
           feeBps: tenant.current_tenure_fee_bps,
           feeIntentId: feeIntent.id,
         },

@@ -23,6 +23,7 @@
  */
 
 import { logger } from '../../logger';
+import { env } from '../../config/env';
 import { pool, withTransaction } from '../../db';
 import { AppError, ConflictError, NotFoundError } from '../../errors';
 import { record } from '../audit/audit.service';
@@ -447,13 +448,17 @@ export class TenureRenewalService {
              cycle_contribution_deadline_at = NOW() + INTERVAL '21 days',
              cycle_payout_at = NOW() + INTERVAL '30 days',
              cycle_advanced_at = NULL,
+             current_tenure_fee_bps = $3,
+             current_tenure_tvc_bps = $4,
+             current_tenure_tvc_rate_numerator = $5,
+             current_tenure_tvc_rate_denominator = $6,
              tenure_started_at = NOW(),
              renewal_opened_at = NULL,
              renewal_vote_ends_at = NULL,
              renewal_fill_ends_at = NULL,
              completed_at = NULL
          WHERE id = $1`,
-        [tenantId, nextTenure],
+        [tenantId, nextTenure, env.PLATFORM_FEE_BPS, Math.round(env.TVC_ANNUAL_RATE_NUMERATOR / env.TVC_ANNUAL_RATE_DENOMINATOR * 10000), env.TVC_ANNUAL_RATE_NUMERATOR, env.TVC_ANNUAL_RATE_DENOMINATOR],
       );
 
       await record(
