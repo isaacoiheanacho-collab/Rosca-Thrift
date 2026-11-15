@@ -187,19 +187,19 @@ async function main(): Promise<number> {
   }
   pass('cycle-1 recipient = slot 1');
 
-  // Slot 1: TVC -£500; adjusted pool £11,500; fee £172.50; net £11,327.50.
-  if (net !== 1_132_750n) {
-    fail('net amount = £11,327.50', `got ${net} pence = £${Number(net) / 100}`);
+  // Slot 1 → TVC -£110, fee 1.5% of £11,890 = £178.35, net = £11,711.65
+  if (net !== 1_171_165n) {
+    fail('net amount = £11,711.65', `got ${net} pence = £${Number(net) / 100}`);
     return 1;
   }
-  pass('net amount = £11,327.50 (slot 1, TVC -£500, fee 1.5%)');
+  pass('net amount = £11,711.65 (slot 1, TVC -£110, fee 1.5%)');
 
   // 6. Upload fee receipt (via super admin + branchId param)
   const feeReceiptRes = await uploadFile(
     `/api/branch-admin/payouts/fees/${cycle1Payout.feeIntentId}/receipt?branchId=${branchId}`,
     superToken,
     {
-      claimedAmount: '17250',
+      claimedAmount: '17835',
       claimedReference: 'FEEfee12301',
       claimedSenderName: 'Payout Test Branch',
     },
