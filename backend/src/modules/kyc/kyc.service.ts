@@ -10,6 +10,7 @@ import { logger } from '../../logger';
 import { AppError, ConflictError, NotFoundError } from '../../errors';
 import { record } from '../audit/audit.service';
 import { usersRepository } from '../users/users.repository';
+import { kycRepository } from './kyc.repository';
 import { provisioningService } from '../tenants/provisioning.service';
 import { notificationsService } from '../notifications/notifications.service';
 import { kycRepository, type KycStatus, type KycSubmissionRow } from './kyc.repository';
@@ -151,7 +152,21 @@ export class KycService {
   }
 
   async getMine(userId: string): Promise<KycSubmissionDto | null> {
-    const row = await kycRepository.findLatestByUserId(userId);
+    let row = await kycRepository.findLatestByUserId(userId);
+
+    // Older Branch Admin accounts may predate registration-created KYC drafts.
+    // Create their one-time stored record so the dashboard receives both names
+    // from the KYC record, just like accounts registered after the change.
+    if (!row) {
+      const user = await usersRepository.findById(userId);
+      if (user?.role === 'BRANCH_ADMIN' && user.branch_id) {
+        row = await kycRepository.createRegistrationRecordForExistingAdmin(
+          userId,
+          user.branch_id,
+        );
+      }
+    }
+
     return row ? toDto(row) : null;
   }
 
