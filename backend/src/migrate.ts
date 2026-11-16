@@ -11,7 +11,11 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { pool } from './db';
 
-const SQL_DIR = path.join(__dirname, 'sql');
+const SQL_DIR_CANDIDATES = [
+  path.join(__dirname, 'sql'),
+  path.join(__dirname, '..', 'src', 'sql'),
+];
+const SQL_DIR = SQL_DIR_CANDIDATES.find((dir) => fs.existsSync(dir)) ?? SQL_DIR_CANDIDATES[0];
 
 async function ensureMigrationsTable(): Promise<void> {
   await pool.query(`
