@@ -50,6 +50,26 @@ export class KycRepository {
     return result.rows[0] ?? null;
   }
 
+  async backfillRegistrationNamesForExistingAdmin(
+    userId: string,
+    branchId: string,
+  ): Promise<KycSubmissionRow | null> {
+    const result = await pool.query<KycSubmissionRow>(
+      `UPDATE kyc_submissions k
+       SET legal_name = COALESCE(NULLIF(k.legal_name, ''), u.full_name),
+           account_name = COALESCE(NULLIF(k.account_name, ''), b.name)
+       FROM users u
+       JOIN branches b ON b.id = u.branch_id
+       WHERE k.user_id = u.id
+         AND u.id = $1
+         AND u.branch_id = $2
+         AND u.role = 'BRANCH_ADMIN'
+       RETURNING k.*`,
+      [userId, branchId],
+    );
+    return result.rows[0] ?? null;
+  }
+
   async createRegistrationRecordForExistingAdmin(
     userId: string,
     branchId: string,
