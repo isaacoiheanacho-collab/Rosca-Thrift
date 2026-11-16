@@ -11,6 +11,7 @@ import { record } from '../audit/audit.service';
 import { hashPassword } from '../../utils/password';
 import { createAndSendOtp } from '../../utils/otp';
 import { authRepository } from '../auth/auth.repository';
+import { kycRepository } from '../kyc/kyc.repository';
 import { consentService } from '../consent/consent.service';
 import {
   CONSENT_TYPES,
