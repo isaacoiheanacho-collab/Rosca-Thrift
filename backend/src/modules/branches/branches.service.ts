@@ -9,6 +9,7 @@ import { pool } from '../../db';
 import { AppError, ConflictError, NotFoundError } from '../../errors';
 import { record } from '../audit/audit.service';
 import { hashPassword } from '../../utils/password';
+import { createAndSendOtp } from '../../utils/otp';
 import { authRepository } from '../auth/auth.repository';
 import { consentService } from '../consent/consent.service';
 import {
@@ -284,6 +285,16 @@ export class BranchesService {
       ipAddress: meta.ipAddress ?? null,
       userAgent: meta.userAgent ?? null,
     });
+
+    // Phone verification is part of Branch Admin registration, independent
+    // of the separate Super Admin branch-onboarding review.
+    const otp = await createAndSendOtp(input.admin.phone, 'signup', meta.ipAddress);
+    if (!otp.ok) {
+      logger.warn(
+        { adminId, error: otp.error },
+        'OTP send failed at branch onboarding — admin can retry from verify page',
+      );
+    }
 
     await record({
       actorId: adminId,
