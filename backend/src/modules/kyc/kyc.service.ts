@@ -14,7 +14,6 @@ import { provisioningService } from '../tenants/provisioning.service';
 import { notificationsService } from '../notifications/notifications.service';
 import { kycRepository, type KycStatus, type KycSubmissionRow } from './kyc.repository';
 import type { SubmitKycInput } from './kyc.schemas';
-import { pool } from '../../db';
 
 export interface RequestMeta {
   ipAddress?: string;
@@ -104,29 +103,25 @@ export class KycService {
       type: 'kyc-selfie',
     });
 
-    // For BRANCH_ADMIN, the "legal name" and "account name" are ALWAYS the
-    // branch name (the identity the admin registered with). This is the source
-    // of truth. We override whatever the client sent so it can never diverge.
     let effectiveLegalName = input.legalName;
     let effectiveAccountName = input.accountName;
 
     if (user.role === 'BRANCH_ADMIN') {
-      const branchRes = await pool.query<{ name: string }>(
-        'SELECT name FROM branches WHERE id = $1',
-        [user.branch_id],
-      );
-      const branchName = branchRes.rows[0]?.name;
-      if (!branchName) {
+      // Preserve the two registration values independently. The administrator's
+      // personal legal name comes from the user record; the community account
+      // name comes from its own stored KYC registration value, not branches.name.
+      const registrationKyc = await kycRepository.findRegistrationByUserId(userId);
+      if (!registrationKyc?.account_name) {
         throw new AppError({
-          code: 'KYC_BRANCH_MISSING',
+          code: 'KYC_REGISTRATION_DETAILS_MISSING',
           httpStatus: 500,
-          message: 'Branch not found for this admin',
+          message: 'Branch Admin registration details are missing',
         });
       }
-      effectiveLegalName = branchName;
-      effectiveAccountName = branchName;
+      effectiveLegalName = user.full_name;
+      effectiveAccountName = registrationKyc.account_name;
     } else {
-      // SAVER — keep their own legal name as before, mirror to account name
+      // SAVER — keep their own legal name as before, mirror it to account name.
       effectiveAccountName = input.legalName;
     }
 
