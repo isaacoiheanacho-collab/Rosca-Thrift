@@ -73,7 +73,13 @@ export class BranchesRepository {
          COALESCE(k.status, 'NOT_SUBMITTED') AS admin_kyc_status
        FROM branches b
        LEFT JOIN users u ON u.branch_id = b.id AND u.role = 'BRANCH_ADMIN'
-       LEFT JOIN kyc_submissions k ON k.user_id = u.id
+       LEFT JOIN LATERAL (
+         SELECT status
+         FROM kyc_submissions
+         WHERE user_id = u.id
+         ORDER BY created_at DESC
+         LIMIT 1
+       ) k ON TRUE
        WHERE b.id = $1`,
       [id],
     );
@@ -128,7 +134,13 @@ export class BranchesRepository {
          COALESCE(k.status, 'NOT_SUBMITTED') AS admin_kyc_status
        FROM branches b
        LEFT JOIN users u ON u.branch_id = b.id AND u.role = 'BRANCH_ADMIN'
-       LEFT JOIN kyc_submissions k ON k.user_id = u.id
+       LEFT JOIN LATERAL (
+         SELECT status
+         FROM kyc_submissions
+         WHERE user_id = u.id
+         ORDER BY created_at DESC
+         LIMIT 1
+       ) k ON TRUE
        ${listWhere}
        ORDER BY b.created_at DESC
        LIMIT $${limitIdx} OFFSET $${offsetIdx}`,
