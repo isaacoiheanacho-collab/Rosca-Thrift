@@ -158,10 +158,15 @@ export class KycService {
       // Older accounts can already have a KYC row with blank registration
       // names. Backfill those fields in that row instead of only handling
       // accounts where no KYC row exists.
-      row = await kycRepository.backfillRegistrationNamesForExistingAdmin(
+      await kycRepository.backfillRegistrationNamesForExistingAdmin(
         userId,
         user.branch_id,
-      ) ?? row;
+      );
+
+      // Always re-read after the backfill. The UPDATE can affect both the
+      // registration draft and the submitted KYC row; never let its arbitrary
+      // RETURNING row replace the latest/pending submission.
+      row = await kycRepository.findLatestByUserId(userId);
 
       // If no KYC row exists yet, create the registration draft once.
       if (!row) {
