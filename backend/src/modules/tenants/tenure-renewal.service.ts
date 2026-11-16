@@ -23,6 +23,7 @@
  */
 
 import { logger } from '../../logger';
+import { env } from '../../config/env';
 import { pool, withTransaction } from '../../db';
 import { AppError, ConflictError, NotFoundError } from '../../errors';
 import { record } from '../audit/audit.service';
@@ -441,6 +442,7 @@ export class TenureRenewalService {
          SET renewal_state = 'RENEWED',
              status = 'ACTIVE',
              current_tenure = $2,
+             current_tenure_tvc_bps = $3,
              current_cycle = 1,
              cycle_started_at = NOW(),
              cycle_ends_at = NOW() + INTERVAL '30 days',
@@ -453,7 +455,7 @@ export class TenureRenewalService {
              renewal_fill_ends_at = NULL,
              completed_at = NULL
          WHERE id = $1`,
-        [tenantId, nextTenure],
+        [tenantId, nextTenure, env.TVC_ANNUAL_BPS],
       );
 
       await record(
