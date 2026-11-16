@@ -266,6 +266,19 @@ export class BranchesService {
       // Backfill created_by
       await branchesRepository.setCreatedBy(createdBranch.id, admin.id, tx);
 
+      // Store the registration names in the initial KYC record independently:
+      // legal_name is the administrator's personal name; account_name is the
+      // community name entered during registration. This is a draft only.
+      await kycRepository.insertRegistrationRecord(
+        {
+          userId: admin.id,
+          branchId: createdBranch.id,
+          legalName: input.admin.fullName,
+          accountName: input.branch.name,
+        },
+        tx,
+      );
+
       return { branch: createdBranch, adminId: admin.id };
     });
 
