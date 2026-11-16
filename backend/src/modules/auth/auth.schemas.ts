@@ -57,6 +57,10 @@ export const VerifyPhoneSchema = z.object({
   code: z.string().trim().regex(/^\d{6}$/, 'Code must be 6 digits'),
 });
 
+export const ResendOtpSchema = z.object({
+  phone: PhoneSchema,
+});
+
 export const LoginSchema = z.object({
   phone: PhoneSchema,
   password: z.string().min(1, 'Password is required'),
