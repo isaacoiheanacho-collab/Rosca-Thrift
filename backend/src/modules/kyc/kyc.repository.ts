@@ -39,6 +39,17 @@ export class KycRepository {
     return result.rows[0] ?? null;
   }
 
+  async findRegistrationByUserId(userId: string): Promise<KycSubmissionRow | null> {
+    const result = await pool.query<KycSubmissionRow>(
+      `SELECT * FROM kyc_submissions
+       WHERE user_id = $1 AND status = 'NOT_SUBMITTED'
+       ORDER BY created_at ASC
+       LIMIT 1`,
+      [userId],
+    );
+    return result.rows[0] ?? null;
+  }
+
   async findLatestByUserId(userId: string): Promise<KycSubmissionRow | null> {
     const result = await pool.query<KycSubmissionRow>(
       `SELECT * FROM kyc_submissions
