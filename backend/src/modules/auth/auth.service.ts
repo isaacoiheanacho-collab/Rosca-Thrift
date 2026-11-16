@@ -234,6 +234,30 @@ export class AuthService {
   }
 
   // ─────────────────────────────────────────────────────────────
+  // Resend signup OTP
+  // ─────────────────────────────────────────────────────────────
+
+  async resendSignupOtp(input: { phone: string }, meta: RequestMeta): Promise<void> {
+    const user = await authRepository.findUserByPhone(input.phone);
+
+    // Do not reveal whether a phone number has an account or its status.
+    if (!user || user.phone_verified_at || user.status === 'SUSPENDED') return;
+
+    const send = await createAndSendOtp(input.phone, 'signup', meta.ipAddress);
+    if (!send.ok) {
+      const rateLimited = (send.error ?? '').toLowerCase().includes('too many');
+      logger.warn({ userId: user.id, error: send.error }, 'Signup OTP resend failed');
+      throw new AppError({
+        code: rateLimited ? 'RATE_LIMIT_EXCEEDED' : 'OTP_SEND_FAILED',
+        httpStatus: rateLimited ? 429 : 503,
+        message: rateLimited
+          ? 'Too many codes requested. Please try again later.'
+          : 'We could not send a new code. Please try again shortly.',
+      });
+    }
+  }
+
+  // ─────────────────────────────────────────────────────────────
   // Verify phone
   // ─────────────────────────────────────────────────────────────
 
