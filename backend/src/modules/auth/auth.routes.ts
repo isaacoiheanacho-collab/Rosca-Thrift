@@ -18,6 +18,7 @@ import {
   LoginSchema,
   RefreshSchema,
   RegisterSchema,
+  ResendOtpSchema,
   ResetPasswordSchema,
   VerifyPhoneSchema,
 } from './auth.schemas';
@@ -72,6 +73,20 @@ router.post(
       
       const result = await authService.registerSuperAdmin(req.body, metaOf(req));
       res.status(201).json({ ok: true, data: result });
+    } catch (err) {
+      next(err);
+    }
+  },
+);
+
+router.post(
+  '/resend-otp',
+  otpVerifyLimiter,
+  validate({ body: ResendOtpSchema }),
+  async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      await authService.resendSignupOtp(req.body, metaOf(req));
+      res.json({ ok: true, data: { message: 'If the account is eligible, a new verification code has been sent.' } });
     } catch (err) {
       next(err);
     }
