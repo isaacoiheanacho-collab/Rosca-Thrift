@@ -151,14 +151,20 @@ export class KycService {
   }
 
   async getMine(userId: string): Promise<KycSubmissionDto | null> {
+    const user = await usersRepository.findById(userId);
     let row = await kycRepository.findLatestByUserId(userId);
 
-    // Older Branch Admin accounts may predate registration-created KYC drafts.
-    // Create their one-time stored record so the dashboard receives both names
-    // from the KYC record, just like accounts registered after the change.
-    if (!row) {
-      const user = await usersRepository.findById(userId);
-      if (user?.role === 'BRANCH_ADMIN' && user.branch_id) {
+    if (user?.role === 'BRANCH_ADMIN' && user.branch_id) {
+      // Older accounts can already have a KYC row with blank registration
+      // names. Backfill those fields in that row instead of only handling
+      // accounts where no KYC row exists.
+      row = await kycRepository.backfillRegistrationNamesForExistingAdmin(
+        userId,
+        user.branch_id,
+      ) ?? row;
+
+      // If no KYC row exists yet, create the registration draft once.
+      if (!row) {
         row = await kycRepository.createRegistrationRecordForExistingAdmin(
           userId,
           user.branch_id,
