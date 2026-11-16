@@ -10,7 +10,7 @@
   "scripts": {
     "dev": "nodemon",
     "build": "tsc",
-    "start": "node dist/server.js",
+    "start": "node dist/migrate.js && node dist/server.js",
     "typecheck": "tsc --noEmit",
     "migrate": "ts-node --transpile-only src/migrate.ts",
     "smoke": "ts-node --transpile-only scripts/smoke-test.ts",
