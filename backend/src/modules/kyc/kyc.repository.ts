@@ -50,6 +50,28 @@ export class KycRepository {
     return result.rows[0] ?? null;
   }
 
+  async createRegistrationRecordForExistingAdmin(
+    userId: string,
+    branchId: string,
+  ): Promise<KycSubmissionRow | null> {
+    const result = await pool.query<KycSubmissionRow>(
+      `INSERT INTO kyc_submissions
+         (user_id, branch_id, legal_name, account_name, status)
+       SELECT u.id, b.id, u.full_name, b.name, 'NOT_SUBMITTED'
+       FROM users u
+       JOIN branches b ON b.id = u.branch_id
+       WHERE u.id = $1
+         AND u.branch_id = $2
+         AND u.role = 'BRANCH_ADMIN'
+         AND NOT EXISTS (
+           SELECT 1 FROM kyc_submissions k WHERE k.user_id = u.id
+         )
+       RETURNING *`,
+      [userId, branchId],
+    );
+    return result.rows[0] ?? null;
+  }
+
   async findLatestByUserId(userId: string): Promise<KycSubmissionRow | null> {
     const result = await pool.query<KycSubmissionRow>(
       `SELECT * FROM kyc_submissions
