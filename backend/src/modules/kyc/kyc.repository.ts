@@ -96,7 +96,8 @@ export class KycRepository {
     const result = await pool.query<KycSubmissionRow>(
       `SELECT * FROM kyc_submissions
        WHERE user_id = $1
-       ORDER BY created_at DESC
+       ORDER BY CASE WHEN status = 'PENDING' THEN 0 ELSE 1 END,
+                created_at DESC
        LIMIT 1`,
       [userId],
     );
