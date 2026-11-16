@@ -10,7 +10,6 @@ import { logger } from '../../logger';
 import { AppError, ConflictError, NotFoundError } from '../../errors';
 import { record } from '../audit/audit.service';
 import { usersRepository } from '../users/users.repository';
-import { kycRepository } from './kyc.repository';
 import { provisioningService } from '../tenants/provisioning.service';
 import { notificationsService } from '../notifications/notifications.service';
 import { kycRepository, type KycStatus, type KycSubmissionRow } from './kyc.repository';
