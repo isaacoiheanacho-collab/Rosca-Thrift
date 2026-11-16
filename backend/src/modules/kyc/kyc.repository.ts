@@ -3,6 +3,7 @@
  */
 
 import { pool } from '../../db';
+import type { PoolClient } from 'pg';
 
 export type KycStatus = 'PENDING' | 'APPROVED' | 'REJECTED' | 'NOT_SUBMITTED';
 
@@ -12,10 +13,10 @@ export interface KycSubmissionRow {
   branch_id: string;
   legal_name: string;
   account_name: string | null;
-  selfie_object_key: string;
-  bank_name: string;
-  account_number: string;
-  sort_code: string;
+  selfie_object_key: string | null;
+  bank_name: string | null;
+  account_number: string | null;
+  sort_code: string | null;
   status: KycStatus;
   reviewed_by: string | null;
   reviewed_at: Date | null;
@@ -55,6 +56,25 @@ export class KycRepository {
       [id],
     );
     return result.rows[0] ?? null;
+  }
+
+  async insertRegistrationRecord(
+    data: {
+      userId: string;
+      branchId: string;
+      legalName: string;
+      accountName: string;
+    },
+    tx: PoolClient,
+  ): Promise<KycSubmissionRow> {
+    const result = await tx.query<KycSubmissionRow>(
+      `INSERT INTO kyc_submissions
+         (user_id, branch_id, legal_name, account_name, status)
+       VALUES ($1, $2, $3, $4, 'NOT_SUBMITTED')
+       RETURNING *`,
+      [data.userId, data.branchId, data.legalName, data.accountName],
+    );
+    return result.rows[0]!;
   }
 
   async insert(data: {
