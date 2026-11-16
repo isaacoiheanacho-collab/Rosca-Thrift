@@ -3,6 +3,7 @@
  */
 
 import { pool } from '../../db';
+import { env } from '../../config/env';
 
 export type TenantStatus = 'FILLING' | 'ACTIVE' | 'COMPLETED' | 'ARCHIVED';
 export type MembershipStatus = 'ACTIVE' | 'COLLECTED' | 'REMOVED';
@@ -138,6 +139,8 @@ export class TenantsRepository {
 
     if (opts.activate) {
       fields.push('activated_at = NOW()');
+      fields.push(`current_tenure_tvc_bps = ${params.length + 1}`);
+      params.push(env.TVC_ANNUAL_BPS);
     }
     if (opts.complete) {
       fields.push('completed_at = NOW()');
