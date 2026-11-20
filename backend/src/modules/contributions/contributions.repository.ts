@@ -531,7 +531,7 @@ export class ContributionsRepository {
         i.cycle, i.expected_amount, u.full_name AS user_name, t.name AS tenant_name
        FROM receipts r JOIN contribution_intents i ON i.id = r.intent_id
        JOIN users u ON u.id = i.user_id JOIN tenants t ON t.id = i.tenant_id
-       ${where} ORDER BY r.created_at DESC LIMIT ${limitIdx} OFFSET ${offsetIdx}`, params,
+       ${where} ORDER BY r.created_at DESC LIMIT $${limitIdx} OFFSET $${offsetIdx}`, params,
     );
     return { receipts: result.rows, total: Number(count.rows[0]?.count ?? '0') };
   }
