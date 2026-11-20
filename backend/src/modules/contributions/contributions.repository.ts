@@ -516,8 +516,8 @@ export class ContributionsRepository {
   ): Promise<{ receipts: any[]; total: number }> {
     const conditions = [`r.purpose = 'CONTRIBUTION'`, `r.review_status = 'REJECTED'`];
     const params: unknown[] = [];
-    if (branchId) { params.push(branchId); conditions.push(`i.branch_id = ${params.length}`); }
-    if (options.tenantId) { params.push(options.tenantId); conditions.push(`i.tenant_id = ${params.length}`); }
+    if (branchId) { params.push(branchId); conditions.push(`i.branch_id = $${params.length}`); }
+    if (options.tenantId) { params.push(options.tenantId); conditions.push(`i.tenant_id = $${params.length}`); }
     const where = `WHERE ${conditions.join(' AND ')}`;
     const count = await pool.query<{ count: string }>(
       `SELECT COUNT(*)::text AS count FROM receipts r JOIN contribution_intents i ON i.id = r.intent_id ${where}`, params,
