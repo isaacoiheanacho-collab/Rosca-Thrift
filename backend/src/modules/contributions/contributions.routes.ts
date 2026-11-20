@@ -152,20 +152,27 @@ branchAdminContributionsRouter.use(requireBranchAdmin);
 
 branchAdminContributionsRouter.get(
   '/',
-  validate({ query: ListPendingSchema.extend({ status: z.enum(['PENDING', 'CONFIRMED']).default('PENDING') }) }),
+  validate({ query: ListPendingSchema.extend({ status: z.enum(['PENDING', 'CONFIRMED', 'REJECTED']).default('PENDING') }) }),
   async (req: Request, res: Response, next: NextFunction) => {
     try {
       const q = req.query as unknown as {
         limit: number;
         offset: number;
-        status: 'PENDING' | 'CONFIRMED';
+        status: 'PENDING' | 'CONFIRMED' | 'REJECTED';
         tenantId?: string;
         cycle?: number;
       };
       const user = req.user!;
       const branchFilter = user.role === 'BRANCH_ADMIN' ? user.branchId : null;
 
-      if (q.status === 'CONFIRMED') {
+      if (q.status === 'REJECTED') {
+        const result = await contributionsService.listRejectedForAdmin(branchFilter, {
+          limit: q.limit,
+          offset: q.offset,
+          tenantId: q.tenantId,
+        });
+        res.json({ ok: true, data: { ...result, limit: q.limit, offset: q.offset } });
+      } else if (q.status === 'CONFIRMED') {
         const result = await contributionsService.listConfirmedForAdmin(branchFilter, {
           limit: q.limit,
           offset: q.offset,
