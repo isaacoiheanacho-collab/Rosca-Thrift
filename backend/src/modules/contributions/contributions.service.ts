@@ -42,6 +42,8 @@ export interface ContributionIntentDto {
   state: 'PENDING' | 'CONFIRMED' | 'LATE' | 'EXEMPT';
   isOverdue: boolean;
   hasReceipt: boolean;
+  receiptStatus: 'PENDING' | 'REJECTED' | 'APPROVED' | null;
+  receiptRejectionReason: string | null;
   targetAccount: {
     accountHolderName: string;
     bankName: string;
@@ -150,9 +152,11 @@ async function intentToDto(
 
   // If caller passed a pre-fetched set, use it. Otherwise fall back
   // to a single lookup (used by getOrCreateCurrentIntent).
+  const receipt = await contributionsRepository.findReceiptByIntentId(row.id);
+  const receiptStatus = receipt?.review_status ?? null;
   const hasReceipt = receiptIntentIds
     ? receiptIntentIds.has(row.id)
-    : !!(await contributionsRepository.findReceiptByIntentId(row.id));
+    : receiptStatus === 'PENDING';
 
   return {
     id: row.id,
@@ -167,6 +171,8 @@ async function intentToDto(
     state: row.state,
     isOverdue: row.deadline_at.getTime() < now && row.state === 'PENDING',
     hasReceipt,
+    receiptStatus,
+    receiptRejectionReason: receiptStatus === 'REJECTED' ? receipt?.review_note ?? null : null,
     targetAccount,
     createdAt: row.created_at.toISOString(),
   };
@@ -403,7 +409,7 @@ export class ContributionsService {
       // We still need the full receipt row for the URL etc. But only
       // for intents that actually have a receipt.
       const receipt = receiptIds.has(i.id)
-        ? await contributionsRepository.findReceiptByIntentId(i.id)
+        ? await contributionsRepository.findPendingReceiptByIntentId(i.id)
         : null;
 
       if (receipt) {
@@ -428,6 +434,31 @@ export class ContributionsService {
     }
 
     return { intents: dtos, total };
+  }
+
+  async listRejectedForAdmin(
+    branchId: string | null,
+    options: { limit: number; offset: number; tenantId?: string },
+  ): Promise<{ receipts: any[]; total: number }> {
+    const { receipts, total } = await contributionsRepository.listRejectedReceiptsForBranch(branchId, options);
+    const dtos = await Promise.all(receipts.map(async (r: any) => ({
+      receiptId: r.receipt_id,
+      intentId: r.intent_id,
+      tenantName: r.tenant_name,
+      userName: r.user_name,
+      reference: r.reference,
+      cycle: r.cycle,
+      amountPence: r.claimed_amount?.toString() ?? r.expected_amount?.toString() ?? null,
+      claimedReference: r.claimed_reference,
+      claimedSenderName: r.claimed_sender_name,
+      claimedNote: r.claimed_note,
+      rejectionReason: r.review_note,
+      uploadedAt: r.uploaded_at.toISOString(),
+      objectUrl: await getPresignedDownloadUrl(r.object_key, 300),
+      fileName: r.file_name,
+      mimeType: r.mime_type,
+    })));
+    return { receipts: dtos, total };
   }
 
   async listConfirmedForAdmin(
@@ -555,6 +586,7 @@ export class ContributionsService {
       );
 
       await contributionsRepository.updateIntentState(intent.id, 'CONFIRMED', tx);
+      await contributionsRepository.updateLatestReceiptReview(intent.id, 'APPROVED', null, tx);
 
       await ledgerService.creditContribution(
         {
@@ -661,7 +693,10 @@ export class ContributionsService {
     }
 
     const newState = intent.deadline_at.getTime() < Date.now() ? 'LATE' : 'PENDING';
-    await contributionsRepository.updateIntentState(intent.id, newState);
+    await withTransaction(async (tx) => {
+      await contributionsRepository.updateLatestReceiptReview(intent.id, 'REJECTED', reason, tx);
+      await contributionsRepository.updateIntentState(intent.id, newState, tx);
+    });
 
     await record({
       actorId: adminId,
@@ -719,7 +754,7 @@ export class ContributionsService {
     }
 
     // NEW: Block duplicate receipt uploads
-    const existingReceipt = await contributionsRepository.findReceiptByIntentId(intent.id);
+    const existingReceipt = await contributionsRepository.findPendingReceiptByIntentId(intent.id);
     if (existingReceipt) {
       throw new ConflictError(
         'You have already uploaded a receipt for this cycle. Awaiting branch admin review.',

@@ -58,6 +58,8 @@ export interface ReceiptRow {
   claimed_reference: string | null;
   claimed_sender_name: string | null;
   claimed_note: string | null;
+  review_status: 'PENDING' | 'REJECTED' | 'APPROVED';
+  review_note: string | null;
   created_at: Date;
 }
 
@@ -147,6 +149,7 @@ export class ContributionsRepository {
            SELECT 1 FROM receipts r
            WHERE r.intent_id = i.id
              AND r.purpose = 'CONTRIBUTION'
+             AND r.review_status = 'PENDING'
          )
        ORDER BY tm.slot_number ASC`,
       [tenantId, tenure, cycle],
@@ -263,7 +266,7 @@ export class ContributionsRepository {
   ): Promise<{ intents: ContributionIntentRow[]; total: number }> {
     const conditions: string[] = [
       `i.state IN ('PENDING', 'LATE')`,
-      `EXISTS (SELECT 1 FROM receipts r WHERE r.intent_id = i.id)`,
+      `EXISTS (SELECT 1 FROM receipts r WHERE r.intent_id = i.id AND r.purpose = 'CONTRIBUTION' AND r.review_status = 'PENDING')`,
       `NOT EXISTS (SELECT 1 FROM contributions c WHERE c.intent_id = i.id)`,
     ];
     const params: unknown[] = [];
@@ -482,10 +485,55 @@ export class ContributionsRepository {
 
   async findReceiptByIntentId(intentId: string): Promise<ReceiptRow | null> {
     const result = await pool.query<ReceiptRow>(
-      `SELECT * FROM receipts WHERE intent_id = $1 ORDER BY created_at DESC LIMIT 1`,
+      `SELECT * FROM receipts WHERE intent_id = $1 AND purpose = 'CONTRIBUTION' ORDER BY created_at DESC LIMIT 1`,
       [intentId],
     );
     return result.rows[0] ?? null;
+  }
+
+  async findPendingReceiptByIntentId(intentId: string): Promise<ReceiptRow | null> {
+    const result = await pool.query<ReceiptRow>(
+      `SELECT * FROM receipts WHERE intent_id = $1 AND purpose = 'CONTRIBUTION'
+       AND review_status = 'PENDING' ORDER BY created_at DESC LIMIT 1`,
+      [intentId],
+    );
+    return result.rows[0] ?? null;
+  }
+
+  async updateLatestReceiptReview(intentId: string, status: 'REJECTED' | 'APPROVED', note: string | null, tx?: PoolClient): Promise<void> {
+    const runner = tx ?? pool;
+    await runner.query(
+      `UPDATE receipts SET review_status = $1, review_note = $2
+       WHERE id = (SELECT id FROM receipts WHERE intent_id = $3 AND purpose = 'CONTRIBUTION'
+         AND review_status = 'PENDING' ORDER BY created_at DESC LIMIT 1)`,
+      [status, note, intentId],
+    );
+  }
+
+  async listRejectedReceiptsForBranch(
+    branchId: string | null,
+    options: { limit: number; offset: number; tenantId?: string },
+  ): Promise<{ receipts: any[]; total: number }> {
+    const conditions = [`r.purpose = 'CONTRIBUTION'`, `r.review_status = 'REJECTED'`];
+    const params: unknown[] = [];
+    if (branchId) { params.push(branchId); conditions.push(`i.branch_id = ${params.length}`); }
+    if (options.tenantId) { params.push(options.tenantId); conditions.push(`i.tenant_id = ${params.length}`); }
+    const where = `WHERE ${conditions.join(' AND ')}`;
+    const count = await pool.query<{ count: string }>(
+      `SELECT COUNT(*)::text AS count FROM receipts r JOIN contribution_intents i ON i.id = r.intent_id ${where}`, params,
+    );
+    params.push(options.limit); const limitIdx = params.length;
+    params.push(options.offset); const offsetIdx = params.length;
+    const result = await pool.query(
+      `SELECT r.id AS receipt_id, r.object_key, r.file_name, r.mime_type,
+        r.claimed_amount, r.claimed_reference, r.claimed_sender_name, r.claimed_note,
+        r.review_note, r.created_at AS uploaded_at, i.id AS intent_id, i.reference,
+        i.cycle, i.expected_amount, u.full_name AS user_name, t.name AS tenant_name
+       FROM receipts r JOIN contribution_intents i ON i.id = r.intent_id
+       JOIN users u ON u.id = i.user_id JOIN tenants t ON t.id = i.tenant_id
+       ${where} ORDER BY r.created_at DESC LIMIT ${limitIdx} OFFSET ${offsetIdx}`, params,
+    );
+    return { receipts: result.rows, total: Number(count.rows[0]?.count ?? '0') };
   }
 
   /**
@@ -496,7 +544,7 @@ export class ContributionsRepository {
   async findReceiptIntentIds(intentIds: string[]): Promise<Set<string>> {
     if (intentIds.length === 0) return new Set();
     const result = await pool.query<{ intent_id: string }>(
-      `SELECT DISTINCT intent_id FROM receipts WHERE intent_id = ANY($1::uuid[])`,
+      `SELECT DISTINCT intent_id FROM receipts WHERE intent_id = ANY($1::uuid[]) AND purpose = 'CONTRIBUTION' AND review_status = 'PENDING'`,
       [intentIds],
     );
     return new Set(result.rows.map((r) => r.intent_id));
@@ -537,6 +585,7 @@ export class ContributionsRepository {
        cycle_receipts AS (
          SELECT DISTINCT intent_id FROM receipts
          WHERE intent_id IN (SELECT id FROM cycle_intents)
+           AND purpose = 'CONTRIBUTION' AND review_status = 'PENDING'
        )
        SELECT
          tm.id           AS membership_id,
