@@ -277,12 +277,12 @@ export class PayoutsService {
 
   async listPayoutsByTenant(tenantId: string): Promise<PayoutIntentDto[]> {
     const rows = await payoutsRepository.listPayoutsByTenant(tenantId, 100);
-    return Promise.all(rows.map(payoutToDto));
+    return Promise.all(rows.map((row) => payoutToDto(row)));
   }
 
   async listPayoutsByRecipient(userId: string): Promise<PayoutIntentDto[]> {
     const rows = await payoutsRepository.listPayoutsByRecipient(userId);
-    return Promise.all(rows.map(payoutToDto));
+    return Promise.all(rows.map((row) => payoutToDto(row)));
   }
 
   /**
