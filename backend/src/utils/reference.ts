@@ -5,7 +5,7 @@
  *
  *   IN{tenant6}{slot2}{tenure2}{cycle2}      Contribution
  *   OUT{tenant6}{slot2}{tenure2}{cycle2}     Payout
- *   FEE{tenant6}{tenure2}                    Platform fee
+ *   FEE{tenant6}{tenure2}{cycle2}             Platform fee
  *
  * Where:
  *   tenant6 = first 6 hex characters of the tenant UUID (lowercase)
@@ -31,6 +31,8 @@ export interface ParsedFeeReference {
   kind: 'FEE';
   tenantShort: string;
   tenure: number;
+  /** Absent only for legacy fee references created before cycle-level IDs. */
+  cycle?: number;
 }
 
 export type ParsedReference = ParsedContributionReference | ParsedFeeReference;
@@ -68,9 +70,10 @@ export function buildPayoutReference(
   return `OUT${shortTenant(tenantId)}${pad2(slot)}${pad2(tenure)}${pad2(cycle)}`;
 }
 
-export function buildFeeReference(tenantId: string, tenure: number): string {
+export function buildFeeReference(tenantId: string, tenure: number, cycle: number): string {
   if (tenure < 1 || tenure > 99) throw new Error(`Invalid tenure: ${tenure}`);
-  return `FEE${shortTenant(tenantId)}${pad2(tenure)}`;
+  if (cycle < 1 || cycle > 12) throw new Error(`Invalid cycle: ${cycle}`);
+  return `FEE${shortTenant(tenantId)}${pad2(tenure)}${pad2(cycle)}`;
 }
 
 // Case-insensitive on the hex portion AND the prefix.
@@ -98,6 +101,7 @@ export function parseReference(input: string): ParsedReference | null {
       kind: 'FEE',
       tenantShort: feeMatch[1]!.toLowerCase(),
       tenure: Number(feeMatch[2]),
+      ...(feeMatch[3] ? { cycle: Number(feeMatch[3]) } : {}),
     };
   }
 
