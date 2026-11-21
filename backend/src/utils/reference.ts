@@ -79,7 +79,8 @@ export function buildFeeReference(tenantId: string, tenure: number, cycle: numbe
 // Case-insensitive on the hex portion AND the prefix.
 // Prefix is captured, normalized to uppercase when reading kind.
 const CONTRIBUTION_RE = /^(IN|OUT)([0-9a-fA-F]{6})(\d{2})(\d{2})(\d{2})$/;
-const FEE_RE = /^FEE([0-9a-fA-F]{6})(\d{2})$/i;
+// Accept both cycle-specific references and legacy references already in use.
+const FEE_RE = /^FEE([0-9a-fA-F]{6})(\d{2})(\d{2})?$/i;
 
 export function parseReference(input: string): ParsedReference | null {
   const ref = input.trim();
