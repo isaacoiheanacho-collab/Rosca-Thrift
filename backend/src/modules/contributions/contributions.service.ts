@@ -468,7 +468,7 @@ export class ContributionsService {
     const { contributions, total } = await contributionsRepository.listConfirmedForBranch(branchId, options);
     
     // Map to a clean DTO for the frontend
-    const dtos = contributions.map(c => ({
+    const dtos = await Promise.all(contributions.map(async (c) => ({
       id: c.id,
       reference: c.reference,
       tenantName: c.tenant_name,
@@ -476,7 +476,14 @@ export class ContributionsService {
       cycle: c.cycle,
       amountPence: c.amount.toString(),
       confirmedAt: c.confirmed_at.toISOString(),
-    }));
+      receipt: c.receipt_object_key ? {
+        id: c.receipt_id,
+        objectUrl: await getPresignedDownloadUrl(c.receipt_object_key, 300),
+        fileName: c.receipt_file_name,
+        mimeType: c.receipt_mime_type,
+        uploadedAt: c.receipt_uploaded_at?.toISOString?.() ?? null,
+      } : null,
+    })));
 
     return { contributions: dtos, total };
   }
