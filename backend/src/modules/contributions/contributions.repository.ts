@@ -340,15 +340,29 @@ export class ContributionsRepository {
     params.push(options.offset);
     const offsetIdx = params.length;
 
-    // Join with tenants to get the readable name
+    // Include the original uploaded receipt even after its review status becomes APPROVED.
     const listResult = await pool.query(
-      `SELECT 
+      `SELECT
          c.*,
          u.full_name AS user_name,
-         t.name AS tenant_name
+         t.name AS tenant_name,
+         receipt.id AS receipt_id,
+         receipt.object_key AS receipt_object_key,
+         receipt.file_name AS receipt_file_name,
+         receipt.mime_type AS receipt_mime_type,
+         receipt.created_at AS receipt_uploaded_at
        FROM contributions c
        JOIN users u ON u.id = c.user_id
        JOIN tenants t ON t.id = c.tenant_id
+       LEFT JOIN LATERAL (
+         SELECT r.id, r.object_key, r.file_name, r.mime_type, r.created_at
+         FROM receipts r
+         WHERE r.intent_id = c.intent_id
+           AND r.purpose = 'CONTRIBUTION'
+           AND r.branch_id = c.branch_id
+         ORDER BY r.created_at DESC
+         LIMIT 1
+       ) receipt ON TRUE
        ${where}
        ORDER BY c.confirmed_at DESC
        LIMIT $${limitIdx} OFFSET $${offsetIdx}`,
