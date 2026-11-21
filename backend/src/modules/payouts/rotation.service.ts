@@ -86,7 +86,7 @@ export class RotationService {
     const fee = calculateFee(tvc.potAfterTvc, tenant.current_tenure_fee_bps);
 
     const payoutReference = buildPayoutReference(tenantId, cycle, tenure, cycle);
-    const feeReference = buildFeeReference(tenantId, tenure);
+    const feeReference = buildFeeReference(tenantId, tenure, cycle);
 
     const result = await withTransaction(async (tx) => {
       const feeIntent = await payoutsRepository.insertFeeIntent(
