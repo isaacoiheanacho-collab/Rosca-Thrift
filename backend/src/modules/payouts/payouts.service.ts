@@ -137,7 +137,7 @@ export interface FailedPayoutDto extends PayoutIntentDto {
   failureReasonSafe: string;
 }
 
-async function payoutToDto(row: PayoutIntentRow): Promise<PayoutIntentDto> {
+async function payoutToDto(row: PayoutIntentRow, includeReceiptUrls = false): Promise<PayoutIntentDto> {
   const recipient = await usersRepository.findById(row.recipient_user_id);
 
   // Fetch the Tenant name and the cycle payout due date so consumers can
@@ -172,20 +172,22 @@ async function payoutToDto(row: PayoutIntentRow): Promise<PayoutIntentDto> {
   // after completion, regardless of which authorised account uploaded them.
   let feeReceiptUrl: string | null = null;
   let payoutReceiptUrl: string | null = null;
-  const receiptResult = await pool.query<{ purpose: 'PLATFORM_FEE' | 'PAYOUT'; object_key: string }>(
-    `SELECT DISTINCT ON (purpose) purpose, object_key
-     FROM receipts
-     WHERE payout_id = $1 AND purpose IN ('PLATFORM_FEE', 'PAYOUT')
-     ORDER BY purpose, created_at DESC`,
-    [row.id],
-  );
-  for (const receipt of receiptResult.rows) {
-    try {
-      const url = await getPresignedDownloadUrl(receipt.object_key, 300);
-      if (receipt.purpose === 'PLATFORM_FEE') feeReceiptUrl = url;
-      if (receipt.purpose === 'PAYOUT') payoutReceiptUrl = url;
-    } catch (err) {
-      logger.error({ err, payoutId: row.id, purpose: receipt.purpose }, 'Failed to presign payout receipt URL');
+  if (includeReceiptUrls) {
+    const receiptResult = await pool.query<{ purpose: 'PLATFORM_FEE' | 'PAYOUT'; object_key: string }>(
+      `SELECT DISTINCT ON (purpose) purpose, object_key
+       FROM receipts
+       WHERE payout_id = $1 AND purpose IN ('PLATFORM_FEE', 'PAYOUT')
+       ORDER BY purpose, created_at DESC`,
+      [row.id],
+    );
+    for (const receipt of receiptResult.rows) {
+      try {
+        const url = await getPresignedDownloadUrl(receipt.object_key, 300);
+        if (receipt.purpose === 'PLATFORM_FEE') feeReceiptUrl = url;
+        if (receipt.purpose === 'PAYOUT') payoutReceiptUrl = url;
+      } catch (err) {
+        logger.error({ err, payoutId: row.id, purpose: receipt.purpose }, 'Failed to presign payout receipt URL');
+      }
     }
   }
 
@@ -269,7 +271,7 @@ export class PayoutsService {
     },
   ): Promise<{ intents: PayoutIntentDto[]; total: number }> {
     const { intents, total } = await payoutsRepository.listPayoutsByBranch(branchId, options);
-    const dtos = await Promise.all(intents.map(payoutToDto));
+    const dtos = await Promise.all(intents.map((intent) => payoutToDto(intent, true)));
     return { intents: dtos, total };
   }
 
