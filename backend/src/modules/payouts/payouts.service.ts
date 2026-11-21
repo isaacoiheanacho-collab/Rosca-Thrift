@@ -75,6 +75,8 @@ export interface PayoutIntentDto {
   payoutConfirmedAt: string | null;
   feeIntentId: string | null;
   feeIntent: PayoutFeeIntentDto | null;
+  feeReceiptUrl: string | null;
+  payoutReceiptUrl: string | null;
   failedAt: string | null;
   failureReason: string | null;
   retryOfPayoutId: string | null;
@@ -165,6 +167,28 @@ async function payoutToDto(row: PayoutIntentRow): Promise<PayoutIntentDto> {
     }
   }
 
+  // Both transfer receipts are stored against this payout intent. Resolve
+  // them by purpose (not uploader) so the branch admin can open the records
+  // after completion, regardless of which authorised account uploaded them.
+  let feeReceiptUrl: string | null = null;
+  let payoutReceiptUrl: string | null = null;
+  const receiptResult = await pool.query<{ purpose: 'PLATFORM_FEE' | 'PAYOUT'; object_key: string }>(
+    `SELECT DISTINCT ON (purpose) purpose, object_key
+     FROM receipts
+     WHERE payout_id = $1 AND purpose IN ('PLATFORM_FEE', 'PAYOUT')
+     ORDER BY purpose, created_at DESC`,
+    [row.id],
+  );
+  for (const receipt of receiptResult.rows) {
+    try {
+      const url = await getPresignedDownloadUrl(receipt.object_key, 300);
+      if (receipt.purpose === 'PLATFORM_FEE') feeReceiptUrl = url;
+      if (receipt.purpose === 'PAYOUT') payoutReceiptUrl = url;
+    } catch (err) {
+      logger.error({ err, payoutId: row.id, purpose: receipt.purpose }, 'Failed to presign payout receipt URL');
+    }
+  }
+
   return {
     id: row.id,
     tenantId: row.tenant_id,
@@ -190,6 +214,8 @@ async function payoutToDto(row: PayoutIntentRow): Promise<PayoutIntentDto> {
     payoutConfirmedAt: row.payout_confirmed_at?.toISOString() ?? null,
     feeIntentId: row.fee_intent_id,
     feeIntent,
+    feeReceiptUrl,
+    payoutReceiptUrl,
     failedAt: row.failed_at?.toISOString() ?? null,
     failureReason: row.failure_reason,
     retryOfPayoutId: row.retry_of_payout_id,
