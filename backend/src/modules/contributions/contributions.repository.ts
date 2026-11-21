@@ -359,7 +359,6 @@ export class ContributionsRepository {
          FROM receipts r
          WHERE r.intent_id = c.intent_id
            AND r.purpose = 'CONTRIBUTION'
-           AND r.branch_id = c.branch_id
          ORDER BY r.created_at DESC
          LIMIT 1
        ) receipt ON TRUE
