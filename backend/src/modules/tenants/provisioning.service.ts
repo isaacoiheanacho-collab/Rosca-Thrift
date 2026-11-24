@@ -70,12 +70,15 @@ export class ProvisioningService {
       configurationId = legacy.rows[0]?.id ?? null;
     }
     if (!configurationId) throw new Error('No circle configuration selected for this saver');
-    const configResult = await pool.query<{ member_capacity: number; contribution_amount: string; contribution_window_days: number; cycle_duration_days: number; name: string }>(
-      'SELECT member_capacity, contribution_amount::text, contribution_window_days, cycle_duration_days, name FROM circle_configurations WHERE id = $1 AND branch_id = $2',
+    const configResult = await pool.query<{ member_capacity: number; contribution_amount: string; contribution_frequency: 'WEEKLY' | 'MONTHLY'; name: string }>(
+      'SELECT member_capacity, contribution_amount::text, contribution_frequency, name FROM circle_configurations WHERE id = $1 AND branch_id = $2',
       [configurationId, branchId],
     );
     const config = configResult.rows[0];
     if (!config) throw new Error('Selected circle configuration does not belong to this branch');
+    const schedule = config.contribution_frequency === 'WEEKLY'
+      ? { contributionWindowDays: 5, cycleDurationDays: 7 }
+      : { contributionWindowDays: 21, cycleDurationDays: 30 };
 
     // 2. Already provisioned?
     const existing = await tenantsRepository.findMembershipByUser(userId);
@@ -128,7 +131,7 @@ export class ProvisioningService {
       const tenantName = `${config.name} ${tenantCount + 1}`;
 
       try {
-        tenant = await tenantsRepository.insert(branchId, configurationId, config.member_capacity, config.cycle_duration_days, config.contribution_window_days, tenantName);
+        tenant = await tenantsRepository.insert(branchId, configurationId, config.member_capacity, schedule.cycleDurationDays, schedule.contributionWindowDays, tenantName);
         createdNewTenant = true;
       } catch (error: any) {
         // Another concurrent provisioner may have created this stream's
@@ -198,7 +201,7 @@ export class ProvisioningService {
                current_tenure_tvc_bps = 0,
                tenure_started_at = NOW()
            WHERE id = $1 AND status = 'FILLING'`,
-          [tenant!.id, env.PLATFORM_FEE_BPS, config.cycle_duration_days, config.contribution_window_days]
+          [tenant!.id, env.PLATFORM_FEE_BPS, schedule.cycleDurationDays, schedule.contributionWindowDays]
         );
         activated = true;
       }
