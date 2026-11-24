@@ -10,7 +10,7 @@ CREATE TABLE IF NOT EXISTS circle_configurations (
   id                       UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   branch_id                UUID NOT NULL REFERENCES branches(id) ON DELETE RESTRICT,
   name                     TEXT NOT NULL,
-  contribution_amount      BIGINT CHECK (contribution_amount IS NULL OR contribution_amount > 0),
+  contribution_amount      BIGINT NOT NULL CHECK (contribution_amount > 0),
   contribution_frequency   TEXT NOT NULL CHECK (contribution_frequency IN ('WEEKLY', 'MONTHLY')),
   member_capacity          INT NOT NULL CHECK (member_capacity BETWEEN 2 AND 100),
   collection_positions     INT NOT NULL,
@@ -47,7 +47,7 @@ INSERT INTO circle_configurations (
 SELECT
   b.id,
   'Legacy 12-member configuration',
-  NULL,
+  100000,
   'MONTHLY',
   12,
   12,
@@ -55,8 +55,7 @@ SELECT
   30,
   TRUE
 FROM branches b
-WHERE EXISTS (SELECT 1 FROM tenants t WHERE t.branch_id = b.id)
-  AND NOT EXISTS (
+WHERE NOT EXISTS (
     SELECT 1 FROM circle_configurations c
     WHERE c.branch_id = b.id AND c.is_legacy = TRUE
   );
