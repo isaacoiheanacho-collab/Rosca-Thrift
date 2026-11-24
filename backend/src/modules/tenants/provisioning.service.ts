@@ -128,7 +128,7 @@ export class ProvisioningService {
       const tenantName = `${config.name} ${String(tenantCount + 1).padStart(2, '0')}`;
 
       try {
-        tenant = await tenantsRepository.insert(branchId, configurationId, config.member_capacity, tenantName);
+        tenant = await tenantsRepository.insert(branchId, configurationId, config.member_capacity, config.cycle_duration_days, config.contribution_window_days, tenantName);
         createdNewTenant = true;
       } catch (error: any) {
         // Another concurrent provisioner may have created this stream's
