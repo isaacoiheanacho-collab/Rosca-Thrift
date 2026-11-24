@@ -59,7 +59,7 @@ tenantsRouter.get('/me', requireAuth, async (req: Request, res: Response, next: 
       [dto.tenant.id, dto.tenant.currentTenure, dto.tenant.currentCycle],
     );
     const confirmedCount = Number(cycleCountRes.rows[0]?.count ?? '0');
-    const cycleComplete = confirmedCount >= dto.tenant.memberCount;
+    const cycleComplete = confirmedCount >= dto.tenant.memberCapacity;
 
     let formattedPayout = null;
 
