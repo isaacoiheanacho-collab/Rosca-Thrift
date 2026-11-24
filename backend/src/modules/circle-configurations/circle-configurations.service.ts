@@ -38,7 +38,7 @@ export class CircleConfigurationsService {
               contribution_frequency, member_capacity, collection_positions,
               contribution_window_days, cycle_duration_days, created_at
        FROM circle_configurations
-       WHERE branch_id = $1 AND is_legacy = FALSE
+       WHERE branch_id = $1 AND (is_legacy = FALSE OR NOT EXISTS (SELECT 1 FROM circle_configurations c2 WHERE c2.branch_id = $1 AND c2.is_legacy = FALSE))
        ORDER BY created_at ASC`,
       [branch.rows[0].id],
     );
