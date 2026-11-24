@@ -3,7 +3,7 @@
  * the payout + fee intents.
  *
  * Rule (from project spec):
- *   - Slot number = collection cycle. Slot 1 collects in cycle 1, slot 12 in cycle 12.
+ *   - Slot number = collection position. Each configured slot collects in its corresponding cycle.
  *   - Slot assignment is random (done at tenant activation).
  *   - Recipient is the member with slot_number = current cycle.
  */
