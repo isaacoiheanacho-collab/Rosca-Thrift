@@ -108,8 +108,7 @@ CREATE UNIQUE INDEX IF NOT EXISTS uq_circle_config_material_settings
     member_capacity,
     contribution_window_days,
     cycle_duration_days
-  )
-  WHERE is_legacy = FALSE;
+  );
 
 -- Each configuration has its own sequential tenant names.
 CREATE UNIQUE INDEX IF NOT EXISTS uq_tenant_configuration_name
