@@ -3,22 +3,19 @@
  * the payout + fee intents.
  *
  * Rule (from project spec):
- *   - Slot number = collection cycle. Slot 1 collects in cycle 1, slot 12 in cycle 12.
+ *   - Slot number = collection position. Each configured slot collects in its corresponding cycle.
  *   - Slot assignment is random (done at tenant activation).
  *   - Recipient is the member with slot_number = current cycle.
  */
 
 import { logger } from '../../logger';
-import { env } from '../../config/env';
-import { withTransaction } from '../../db';
+import { withTransaction, pool } from '../../db';
 import { AppError, NotFoundError } from '../../errors';
 import { buildPayoutReference, buildFeeReference } from '../../utils/reference';
 import { tenantsRepository } from '../tenants/tenants.repository';
 import { payoutsRepository } from './payouts.repository';
 import { calculateTvc, calculateFee } from './tvc.service';
 
-/** Circle size is fixed at 12 by design (enforced by schema check on slot_number). */
-const CIRCLE_SIZE = 12;
 
 export interface GenerateIntentsResult {
   payoutIntentId: string;
@@ -45,11 +42,11 @@ export class RotationService {
     const tenant = await tenantsRepository.findById(tenantId);
     if (!tenant) throw new NotFoundError('Tenant');
 
-    if (cycle < 1 || cycle > 12) {
+    if (cycle < 1 || cycle > tenant.member_capacity_snapshot) {
       throw new AppError({
         code: 'PAYOUT_INVALID_CYCLE',
         httpStatus: 400,
-        message: `Invalid cycle: ${cycle}`,
+        message: `Invalid cycle: ${cycle}. Circle has ${tenant.member_capacity_snapshot} collection positions.`,
       });
     }
 
@@ -81,8 +78,14 @@ export class RotationService {
     }
 
     // Compute amounts
-    const gross = BigInt(env.CONTRIBUTION_PENCE) * BigInt(CIRCLE_SIZE);
-    const tvc = calculateTvc(gross, cycle, tenant.current_tenure_tvc_bps);
+    const contributionRes = await pool.query<{ contribution_amount: string }>(
+      'SELECT contribution_amount::text FROM circle_configurations WHERE id = $1',
+      [tenant.configuration_id],
+    );
+    const contribution = BigInt(contributionRes.rows[0]?.contribution_amount ?? '0');
+    const memberCount = tenant.member_capacity_snapshot;
+    const gross = contribution * BigInt(memberCount);
+    const tvc = calculateTvc(gross, cycle, contribution, memberCount);
     const fee = calculateFee(tvc.potAfterTvc, tenant.current_tenure_fee_bps);
 
     const payoutReference = buildPayoutReference(tenantId, cycle, tenure, cycle);

@@ -57,3 +57,7 @@ export {
   superAdminStatsRouter,
   branchAdminStatsRouter,
 } from './stats/stats.routes';
+export {
+  publicCircleConfigurationsRouter,
+  branchAdminCircleConfigurationsRouter,
+} from './circle-configurations/circle-configurations.routes';

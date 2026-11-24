@@ -1,7 +1,7 @@
 /**
  * Provisioning service.
  *
- * Called when a saver becomes "fully verified" (phone verified + KYC approved).
+ * Called by the existing saver provisioning workflow.
  *
  * Flow (in priority order):
  *   1. If user already has an active membership -> do nothing.
@@ -9,12 +9,12 @@
  *      -> assign them to that tenant's unfilled slot (renewal replacement).
  *   3. Else find the oldest FILLING tenant in their branch.
  *      - If none exists -> create a new tenant for the branch.
- *   4. Pick a random free slot (1-12).
+ *   4. Pick a random free slot within the selected configuration capacity.
  *   5. Insert membership.
- *   6. If tenant now has 12 members -> mark tenant ACTIVE, set activated_at,
- *      set cycle columns, snapshot tenure rates.
+ *   6. If tenant reaches its configured capacity -> mark tenant ACTIVE, set activated_at,
+ *      set cycle columns, snapshot the tenure fee and TVC settings.
  *      (Payout + fee intents are NOT generated here — they are generated
- *       once the cycle's 12 contributions are confirmed, in
+ *       once all configured contributions for the cycle are confirmed, in
  *       contributionsService.confirmContribution.)
  *   7. Audit every step.
  *
@@ -38,8 +38,8 @@ export interface ProvisionResult {
   assignedAsReplacement?: boolean;
 }
 
-function pickRandomFreeSlot(used: number[]): number | null {
-  const free = Array.from({ length: 12 }, (_, i) => i + 1).filter((n) => !used.includes(n));
+function pickRandomFreeSlot(used: number[], capacity: number): number | null {
+  const free = Array.from({ length: capacity }, (_, i) => i + 1).filter((n) => !used.includes(n));
   if (free.length === 0) return null;
   return free[Math.floor(Math.random() * free.length)]!;
 }
@@ -63,6 +63,20 @@ export class ProvisioningService {
       };
     }
 
+    const selection = await pool.query<{ circle_configuration_id: string | null }>('SELECT circle_configuration_id FROM users WHERE id = $1', [userId]);
+    let configurationId = selection.rows[0]?.circle_configuration_id ?? null;
+    if (!configurationId) {
+      const legacy = await pool.query<{ id: string }>("SELECT id FROM circle_configurations WHERE branch_id = $1 AND is_legacy = TRUE LIMIT 1", [branchId]);
+      configurationId = legacy.rows[0]?.id ?? null;
+    }
+    if (!configurationId) throw new Error('No circle configuration selected for this saver');
+    const configResult = await pool.query<{ member_capacity: number; contribution_amount: string; contribution_window_days: number; cycle_duration_days: number; name: string }>(
+      'SELECT member_capacity, contribution_amount::text, contribution_window_days, cycle_duration_days, name FROM circle_configurations WHERE id = $1 AND branch_id = $2',
+      [configurationId, branchId],
+    );
+    const config = configResult.rows[0];
+    if (!config) throw new Error('Selected circle configuration does not belong to this branch');
+
     // 2. Already provisioned?
     const existing = await tenantsRepository.findMembershipByUser(userId);
     if (existing) {
@@ -77,9 +91,9 @@ export class ProvisioningService {
     }
 
     // 3. Priority: renewing tenant waiting for a replacement?
-    const replacing = await tenantsRepository.findReplacingByBranch(branchId);
+    const replacing = await tenantsRepository.findReplacingByConfiguration(branchId, configurationId);
     if (replacing) {
-      const result = await tenureRenewalService.tryAssignReplacement(branchId, userId);
+      const result = await tenureRenewalService.tryAssignReplacement(branchId, userId, configurationId);
       if (result) {
         logger.info(
           { userId, tenantId: result.tenantId, slotNumber: result.slotNumber },
@@ -99,36 +113,46 @@ export class ProvisioningService {
     }
 
     // 4. Find or create FILLING tenant
-    let tenant: TenantRow | null = await tenantsRepository.findOpenByBranch(branchId);
+    let tenant: TenantRow | null = await tenantsRepository.findOpenByConfiguration(branchId, configurationId);
     let createdNewTenant = false;
 
     if (!tenant) {
-      // Count existing tenants to generate a sequential name (e.g., Tenant 01)
+      // Count tenants in this configuration to generate its own sequential name (e.g., Orange 1)
       const countRes = await pool.query<{ count: string }>(
-        `SELECT COUNT(*)::text AS count FROM tenants WHERE branch_id = $1`,
-        [branchId]
+        `SELECT COUNT(*)::text AS count FROM tenants WHERE branch_id = $1 AND configuration_id = $2`,
+        [branchId, configurationId]
       );
       const tenantCount = Number(countRes.rows[0]?.count ?? '0');
       
-      // Pad with zero: Tenant 01, Tenant 02
-      const tenantName = `Tenant ${String(tenantCount + 1).padStart(2, '0')}`;
+      // Tenant sequence is independent for each configuration.
+      const tenantName = `${config.name} ${tenantCount + 1}`;
 
-      tenant = await tenantsRepository.insert(branchId, tenantName);
-      createdNewTenant = true;
+      try {
+        tenant = await tenantsRepository.insert(branchId, configurationId, config.member_capacity, config.cycle_duration_days, config.contribution_window_days, tenantName);
+        createdNewTenant = true;
+      } catch (error: any) {
+        // Another concurrent provisioner may have created this stream's
+        // filling tenant. Reuse it instead of creating a duplicate.
+        if (error?.code !== '23505') throw error;
+        tenant = await tenantsRepository.findOpenByConfiguration(branchId, configurationId);
+        if (!tenant) throw error;
+      }
 
-      await record({
-        actorId: null,
-        action: 'TENANT_CREATED',
-        entityType: 'tenant',
-        entityId: tenant.id,
-        metadata: { branchId, reason: 'auto-provisioning', tenantName },
-      });
-
-      logger.info({ tenantId: tenant.id, branchId, tenantName }, 'Tenant auto-created');
+      if (createdNewTenant) {
+        await record({
+          actorId: null,
+          action: 'TENANT_CREATED',
+          entityType: 'tenant',
+          entityId: tenant.id,
+          metadata: { branchId, configurationId, reason: 'auto-provisioning', tenantName },
+        });
+        logger.info({ tenantId: tenant.id, branchId, configurationId, tenantName }, 'Tenant auto-created');
+      }
     }
 
     // 5. Assign slot inside a transaction so we never double-book
     const result = await withTransaction(async (tx) => {
+      await tx.query('SELECT id FROM tenants WHERE id = $1 FOR UPDATE', [tenant!.id]);
       const usedSlotsRes = await tx.query<{ slot_number: number }>(
         `SELECT slot_number FROM tenant_memberships
          WHERE tenant_id = $1 AND status != 'REMOVED'`,
@@ -136,9 +160,9 @@ export class ProvisioningService {
       );
       const used = usedSlotsRes.rows.map((r) => r.slot_number);
 
-      const slot = pickRandomFreeSlot(used);
+      const slot = pickRandomFreeSlot(used, tenant!.member_capacity_snapshot);
       if (slot === null) {
-        throw new Error(`Tenant ${tenant!.id} unexpectedly full during provisioning`);
+        return { slot: 0, activated: false, memberCount: used.length, full: true };
       }
 
       const membershipRes = await tx.query<{ id: string; slot_number: number }>(
@@ -158,7 +182,7 @@ export class ProvisioningService {
 
       let activated = false;
 
-      if (memberCount >= 12 && tenant!.status === 'FILLING') {
+      if (memberCount >= tenant!.member_capacity_snapshot && tenant!.status === 'FILLING') {
         // Set activation + cycle + snapshot tenure rates
         await tx.query(
           `UPDATE tenants
@@ -167,14 +191,14 @@ export class ProvisioningService {
                current_tenure = 1,
                current_cycle = 1,
                cycle_started_at = NOW(),
-               cycle_ends_at = NOW() + INTERVAL '30 days',
-               cycle_contribution_deadline_at = NOW() + INTERVAL '21 days',
-               cycle_payout_at = NOW() + INTERVAL '30 days',
+               cycle_ends_at = NOW() + ($3 * INTERVAL '1 day'),
+               cycle_contribution_deadline_at = NOW() + ($4 * INTERVAL '1 day'),
+               cycle_payout_at = NOW() + ($3 * INTERVAL '1 day'),
                current_tenure_fee_bps = $2,
-               current_tenure_tvc_bps = $3,
+               current_tenure_tvc_bps = 0,
                tenure_started_at = NOW()
            WHERE id = $1 AND status = 'FILLING'`,
-          [tenant!.id, env.PLATFORM_FEE_BPS, env.TVC_ANNUAL_BPS]
+          [tenant!.id, env.PLATFORM_FEE_BPS, config.cycle_duration_days, config.contribution_window_days]
         );
         activated = true;
       }
@@ -200,15 +224,21 @@ export class ProvisioningService {
             metadata: {
               memberCount,
               feeBps: env.PLATFORM_FEE_BPS,
-              tvcBps: env.TVC_ANNUAL_BPS,
+              tvcBps: 0,
             },
           },
           tx
         );
       }
 
-      return { slot, activated, memberCount };
+      return { slot, activated, memberCount, full: false };
     });
+
+    if (result.full) {
+      // A concurrent provisioner filled this tenant while this request waited
+      // for its row lock. Retry lazily; the next tenant is created only now.
+      return this.provisionUserToTenant(userId, branchId);
+    }
 
     logger.info(
       {

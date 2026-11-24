@@ -10,6 +10,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { pool } from './db';
+import { env } from './config/env';
 
 const SQL_DIR_CANDIDATES = [
   path.join(__dirname, 'sql'),
@@ -36,7 +37,7 @@ async function getApplied(): Promise<Set<string>> {
 
 async function applyMigration(filename: string): Promise<void> {
   const fullPath = path.join(SQL_DIR, filename);
-  const sql = fs.readFileSync(fullPath, 'utf8');
+  const sql = fs.readFileSync(fullPath, 'utf8').replaceAll('__LEGACY_CONTRIBUTION_PENCE__', String(env.CONTRIBUTION_PENCE));
 
   const client = await pool.connect();
   try {

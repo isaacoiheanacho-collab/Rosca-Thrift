@@ -3,14 +3,14 @@
  *
  * Lifecycle:
  *   NONE       -> normal operating tenant (in-tenure)
- *   VOTING     -> cycle 12 done, 7-day vote window open
+ *   VOTING     -> final configured cycle done, 7-day vote window open
  *   REPLACING  -> at least one NO vote; 7-day fill window open
- *   READY      -> 12 slots confirmed for next tenure; ready to activate
+ *   READY      -> all configured slots confirmed for next tenure; ready to activate
  *   RENEWED    -> tenure 2+ active
- *   DISSOLVED  -> could not reach 12; admin closed it
+ *   DISSOLVED  -> could not reach configured capacity; admin closed it
  *
  * Called from:
- *   - cycleAdvancementService (opens renewal on cycle 12)
+ *   - cycleAdvancementService (opens renewal on the configured final cycle)
  *   - provisioner (checks for REPLACING tenant before FILLING)
  *   - lazy trigger on dashboard load (checks window expiry)
  *
@@ -23,7 +23,6 @@
  */
 
 import { logger } from '../../logger';
-import { env } from '../../config/env';
 import { pool, withTransaction } from '../../db';
 import { AppError, ConflictError, NotFoundError } from '../../errors';
 import { record } from '../audit/audit.service';
@@ -72,7 +71,7 @@ const FILL_WINDOW_DAYS = 7;
 
 export class TenureRenewalService {
   // ---------------------------------------------------------------
-  // Step 1: open renewal after cycle 12 payout confirmed
+  // Step 1: open renewal after final configured cycle payout confirmed
   // ---------------------------------------------------------------
 
   async openRenewalForTenant(tenantId: string): Promise<void> {
@@ -85,10 +84,10 @@ export class TenureRenewalService {
     }
 
     const memberships = await tenantsRepository.findMembershipsByTenant(tenantId);
-    if (memberships.length !== 12) {
+    if (memberships.length !== tenant.member_capacity_snapshot) {
       logger.warn(
         { tenantId, count: memberships.length },
-        'Cannot open renewal: tenant does not have 12 memberships',
+        'Cannot open renewal: tenant membership count does not match configured capacity',
       );
       return;
     }
@@ -262,7 +261,7 @@ export class TenureRenewalService {
       tenant.current_tenure,
     );
 
-    if (counts.yes === 12) {
+    if (counts.yes === tenant.member_capacity_snapshot) {
       await this.activateNextTenure(tenantId);
       return;
     }
@@ -309,13 +308,14 @@ export class TenureRenewalService {
   async tryAssignReplacement(
     branchId: string,
     newUserId: string,
+    configurationId: string,
   ): Promise<{ tenantId: string; slotNumber: number } | null> {
     const result = await pool.query<TenantRow>(
       `SELECT * FROM tenants
-       WHERE branch_id = $1 AND renewal_state = 'REPLACING'
+       WHERE branch_id = $1 AND configuration_id = $2 AND renewal_state = 'REPLACING'
        ORDER BY renewal_opened_at ASC
        LIMIT 1`,
-      [branchId],
+      [branchId, configurationId],
     );
     const tenant = result.rows[0];
     if (!tenant) return null;
@@ -445,9 +445,9 @@ export class TenureRenewalService {
              current_tenure_tvc_bps = $3,
              current_cycle = 1,
              cycle_started_at = NOW(),
-             cycle_ends_at = NOW() + INTERVAL '30 days',
-             cycle_contribution_deadline_at = NOW() + INTERVAL '21 days',
-             cycle_payout_at = NOW() + INTERVAL '30 days',
+             cycle_ends_at = NOW() + (cycle_duration_days_snapshot * INTERVAL '1 day'),
+             cycle_contribution_deadline_at = NOW() + (contribution_window_days_snapshot * INTERVAL '1 day'),
+             cycle_payout_at = NOW() + (cycle_duration_days_snapshot * INTERVAL '1 day'),
              cycle_advanced_at = NULL,
              tenure_started_at = NOW(),
              renewal_opened_at = NULL,
@@ -455,7 +455,7 @@ export class TenureRenewalService {
              renewal_fill_ends_at = NULL,
              completed_at = NULL
          WHERE id = $1`,
-        [tenantId, nextTenure, env.TVC_ANNUAL_BPS],
+        [tenantId, nextTenure, 0],
       );
 
       await record(
@@ -479,7 +479,7 @@ export class TenureRenewalService {
 
     const tenant = await tenantsRepository.findById(tenantId);
     // NOTE: no eager intent generation here. Payout intents for cycle 1
-    // of the new tenure are generated when 12 contributions are confirmed.
+    // of the new tenure are generated when the configured contribution count is confirmed.
 
     // Notify all tenant members (best-effort)
     if (renewed && tenant) {
@@ -505,9 +505,9 @@ export class TenureRenewalService {
 
     const fillingRes = await pool.query<TenantRow>(
       `SELECT * FROM tenants
-       WHERE branch_id = $1 AND status = 'FILLING' AND id != $2
+       WHERE branch_id = $1 AND configuration_id = $3 AND status = 'FILLING' AND id != $2
        ORDER BY created_at ASC`,
-      [tenant.branch_id, tenantId],
+      [tenant.branch_id, tenantId, tenant.configuration_id],
     );
     const fillingTenants = fillingRes.rows;
 
@@ -544,7 +544,7 @@ export class TenureRenewalService {
     target: { tenant: TenantRow; count: number },
     _allFilling: Array<{ tenant: TenantRow; count: number }>,
   ): Promise<void> {
-    const slotsNeeded = 12 - renewingCount;
+    const slotsNeeded = renewingTenant.member_capacity_snapshot - renewingCount;
     if (slotsNeeded <= 0) {
       await this.activateNextTenure(renewingTenant.id);
       return;
@@ -631,7 +631,7 @@ export class TenureRenewalService {
     renewingMembers: TenantMembershipRow[],
     target: { tenant: TenantRow; count: number },
   ): Promise<void> {
-    const slotsAvailableInTarget = 12 - target.count;
+    const slotsAvailableInTarget = target.tenant.member_capacity_snapshot - target.count;
     if (slotsAvailableInTarget <= 0) {
       logger.warn(
         { targetTenantId: target.tenant.id },
@@ -652,7 +652,7 @@ export class TenureRenewalService {
 
     const used = await tenantsRepository.usedSlots(target.tenant.id);
     const freeSlots: number[] = [];
-    for (let s = 1; s <= 12; s++) {
+    for (let s = 1; s <= target.tenant.member_capacity_snapshot; s++) {
       if (!used.includes(s)) freeSlots.push(s);
     }
 
@@ -706,7 +706,7 @@ export class TenureRenewalService {
         renewingTenant.id,
         'All members transferred during rebalance',
       );
-    } else if (remaining.length === 12) {
+    } else if (remaining.length === renewingTenant.member_capacity_snapshot) {
       await this.activateNextTenure(renewingTenant.id);
     } else {
       logger.warn(

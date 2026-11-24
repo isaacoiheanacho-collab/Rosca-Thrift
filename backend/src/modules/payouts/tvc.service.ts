@@ -1,71 +1,51 @@
 /**
- * TVC (Time-Value Contribution) service.
+ * Time-Value Collection (TVC).
  *
- * Rewards late collectors and penalizes early collectors to reflect the time
- * value of money. The midpoint (6.5) has zero adjustment.
- *
- * Formula:
- *   monthly_rate = annual_rate_bps / 10000 / 12
- *   adjustment   = gross_pot * monthly_rate * (position - 6.5)
- *
- * Where position = the slot number (1-12), which is also the collection cycle.
+ * The earliest collection position receives -50% of one contribution;
+ * the final position receives +50%. Intermediate positions are linear.
+ * The adjustments sum to zero across the complete circle.
  */
-
 export interface TvcCalculation {
   grossPot: bigint;
-  adjustment: bigint;  // signed, pence
-  potAfterTvc: bigint; // gross + adjustment
-  rateBps: number;
+  adjustment: bigint;
+  potAfterTvc: bigint;
+  rateBps: number; // retained for payout-record compatibility; TVC is no longer a rate
 }
 
-/**
- * Calculate TVC for one payout.
- *
- * @param grossPotPence    The gross pool (e.g. £12,000 = 1_200_000n pence)
- * @param position         The slot number (1-12) — also the cycle number
- * @param tvcAnnualBps     The annual TVC rate in basis points (e.g. 200 = 2% p.a.)
- */
 export function calculateTvc(
   grossPotPence: bigint,
   position: number,
-  tvcAnnualBps: number,
+  contributionPence: bigint,
+  memberCount: number,
 ): TvcCalculation {
-  if (position < 1 || position > 12) {
-    throw new Error(`Invalid position: ${position}. Must be 1-12.`);
+  if (!Number.isInteger(memberCount) || memberCount < 2) {
+    throw new Error('Circle must contain at least 2 co-savers');
+  }
+  if (!Number.isInteger(position) || position < 1 || position > memberCount) {
+    throw new Error(`Invalid collection position: ${position}. Must be 1-${memberCount}.`);
+  }
+  if (contributionPence <= 0n || grossPotPence !== contributionPence * BigInt(memberCount)) {
+    throw new Error('Gross pool must equal individual contribution multiplied by circle size');
   }
 
-  // Monthly rate = annual BPS / 10000 / 12
-  // We work in BPS * 100 to preserve integer math:
-  //   adjustmentPence = grossPotPence * tvcAnnualBps * (position - 6.5) / (10000 * 12)
-  //
-  // (position - 6.5) is x.5, so we double it to keep integers:
-  //   adjustmentPence = grossPotPence * tvcAnnualBps * (2*position - 13) / (10000 * 24)
-
-  const doubleOffset = 2 * position - 13; // ranges from -11 to +11
-  const numerator = grossPotPence * BigInt(tvcAnnualBps) * BigInt(doubleOffset);
-  const denominator = BigInt(10000 * 24); // 240000
-
-  // Round half-up: add (denominator / 2) for positive, subtract for negative
+  // adjustment = M * (T - midpoint) / (N - 1)
+  // Equivalent integer form avoids floating-point currency arithmetic.
+  const numerator = contributionPence * BigInt(2 * position - (memberCount + 1));
+  const denominator = BigInt(2 * (memberCount - 1));
   const half = denominator / 2n;
-  const rounded = numerator >= 0n ? (numerator + half) / denominator : (numerator - half) / denominator;
-
-  const adjustment = rounded;
-  const potAfterTvc = grossPotPence + adjustment;
+  const adjustment = numerator >= 0n
+    ? (numerator + half) / denominator
+    : (numerator - half) / denominator;
 
   return {
     grossPot: grossPotPence,
     adjustment,
-    potAfterTvc,
-    rateBps: tvcAnnualBps,
+    potAfterTvc: grossPotPence + adjustment,
+    rateBps: 0,
   };
 }
 
-/**
- * Calculate the platform fee on the post-TVC pot.
- *
- *   feePence = potAfterTvcPence * feeBps / 10000
- *   netPence = potAfterTvcPence - feePence
- */
+/** Platform maintenance fee remains a separate percentage of the adjusted payout. */
 export function calculateFee(
   potAfterTvcPence: bigint,
   feeBps: number,
@@ -74,7 +54,5 @@ export function calculateFee(
   const denominator = 10000n;
   const half = denominator / 2n;
   const fee = (numerator + half) / denominator;
-  const net = potAfterTvcPence - fee;
-
-  return { fee, net, rateBps: feeBps };
+  return { fee, net: potAfterTvcPence - fee, rateBps: feeBps };
 }

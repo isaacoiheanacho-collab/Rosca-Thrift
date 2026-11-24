@@ -4,7 +4,6 @@
  */
 
 import { logger } from '../../logger';
-import { env } from '../../config/env';
 import { withTransaction, pool } from '../../db';
 import { AppError, ConflictError, NotFoundError } from '../../errors';
 import { uploadObject, getPresignedDownloadUrl } from '../../utils/s3';
@@ -278,11 +277,11 @@ export class ContributionsService {
     const tenure = tenant.current_tenure;
     const cycle = tenant.current_cycle;
 
-    if (cycle < 1 || cycle > 12) {
+    if (cycle < 1 || cycle > tenant.member_capacity_snapshot) {
       throw new AppError({
         code: 'CONTRIB_INVALID_CYCLE',
         httpStatus: 500,
-        message: `Tenant has invalid cycle: ${cycle}`,
+        message: `Tenant has invalid cycle: ${cycle}. Circle has ${tenant.member_capacity_snapshot} positions`,
       });
     }
 
@@ -310,7 +309,7 @@ export class ContributionsService {
         cycle,
         slotNumber: membership.slot_number,
         reference,
-        expectedAmount: BigInt(env.CONTRIBUTION_PENCE),
+        expectedAmount: BigInt((await pool.query<{ contribution_amount: string }>('SELECT contribution_amount::text FROM circle_configurations WHERE id = $1', [tenant.configuration_id])).rows[0]?.contribution_amount ?? '0'),
         deadlineAt: tenant.cycle_contribution_deadline_at,
       });
 
@@ -572,6 +571,8 @@ export class ContributionsService {
     if (intent.state === 'EXEMPT') {
       throw new ConflictError('This intent is marked exempt', 'CONTRIB_EXEMPT');
     }
+    const tenant = await tenantsRepository.findById(intent.tenant_id);
+    if (!tenant) throw new NotFoundError('Tenant');
 
     const created = await withTransaction(async (tx) => {
       const contribution = await contributionsRepository.insertContribution(
@@ -644,7 +645,7 @@ export class ContributionsService {
     }
 
     // ─────────────────────────────────────────────────────────────
-    // NEW: if this was the 12th confirmed contribution for this
+    // NEW: if this completed the configured contribution count for this
     // cycle, generate the payout + fee intents NOW, with the actual
     // money in the pool. This is the ONLY place payout intents are
     // created — never on cycle start.
@@ -657,7 +658,7 @@ export class ContributionsService {
       );
       const confirmedCount = Number(cycleCountRes.rows[0]?.count ?? '0');
 
-      if (confirmedCount >= 12) {
+      if (confirmedCount >= tenant.member_capacity_snapshot) {
         await rotationService.ensureIntentsForCycle(
           intent.tenant_id,
           intent.tenure,

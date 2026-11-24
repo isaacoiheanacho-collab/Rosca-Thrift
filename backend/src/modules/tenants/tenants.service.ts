@@ -27,6 +27,13 @@ export interface RequestMeta {
 export interface TenantDto {
   id: string;
   branchId: string;
+  configurationId: string;
+  memberCapacity: number;
+  configurationName: string;
+  contributionAmountPence: string;
+  contributionFrequency: string;
+  contributionWindowDays: number;
+  cycleDurationDays: number;
   name: string | null;
   status: TenantStatus;
   currentCycle: number;
@@ -68,9 +75,18 @@ export interface BranchSummaryDto {
 
 async function toTenantDto(row: TenantRow): Promise<TenantDto> {
   const memberCount = await tenantsRepository.countMembers(row.id);
+  const configResult = await (await import('../../db')).pool.query<{name:string;contribution_amount:string;contribution_frequency:string}>('SELECT name, contribution_amount::text, contribution_frequency FROM circle_configurations WHERE id = $1', [row.configuration_id]);
+  const config = configResult.rows[0];
   return {
     id: row.id,
     branchId: row.branch_id,
+    configurationId: row.configuration_id,
+    memberCapacity: row.member_capacity_snapshot,
+    configurationName: config?.name ?? 'Circle',
+    contributionAmountPence: config?.contribution_amount ?? '0',
+    contributionFrequency: config?.contribution_frequency ?? 'MONTHLY',
+    contributionWindowDays: row.contribution_window_days_snapshot,
+    cycleDurationDays: row.cycle_duration_days_snapshot,
     name: row.name,
     status: row.status,
     currentCycle: row.current_cycle,
@@ -222,7 +238,9 @@ export class TenantsService {
     actorId: string,
     meta: RequestMeta,
   ): Promise<TenantDto> {
-    const tenant = await tenantsRepository.insert(branchId, null);
+    const legacy = await (await import('../../db')).pool.query<{id:string;member_capacity:number;cycle_duration_days:number;contribution_window_days:number}>("SELECT id, member_capacity, cycle_duration_days, contribution_window_days FROM circle_configurations WHERE branch_id = $1 AND is_legacy = TRUE LIMIT 1", [branchId]);
+    if (!legacy.rows[0]) throw new NotFoundError('Legacy circle configuration');
+    const tenant = await tenantsRepository.insert(branchId, legacy.rows[0].id, legacy.rows[0].member_capacity, legacy.rows[0].cycle_duration_days, legacy.rows[0].contribution_window_days, null);
 
     await record({
       actorId,
@@ -252,10 +270,13 @@ export class TenantsService {
     }
 
     const used = await tenantsRepository.usedSlots(tenantId);
+    if (slotNumber < 1 || slotNumber > tenant.member_capacity_snapshot) {
+      throw new ConflictError('Slot is outside this circle configuration capacity', 'TENANT_SLOT_OUT_OF_RANGE');
+    }
     if (used.includes(slotNumber)) {
       throw new ConflictError(`Slot ${slotNumber} is taken`, 'TENANT_SLOT_TAKEN');
     }
-    if (used.length >= 12) {
+    if (used.length >= tenant.member_capacity_snapshot) {
       throw new ConflictError('Tenant is full', 'TENANT_FULL');
     }
 
@@ -276,15 +297,17 @@ export class TenantsService {
   }
 
   async pickRandomFreeSlot(tenantId: string): Promise<number> {
+    const tenant = await tenantsRepository.findById(tenantId);
+    if (!tenant) throw new NotFoundError('Tenant');
     const used = await tenantsRepository.usedSlots(tenantId);
-    if (used.length >= 12) {
+    if (used.length >= tenant.member_capacity_snapshot) {
       throw new AppError({
         code: 'TENANT_FULL',
         httpStatus: 409,
         message: 'Tenant is full',
       });
     }
-    const free = Array.from({ length: 12 }, (_, i) => i + 1).filter((n) => !used.includes(n));
+    const free = Array.from({ length: tenant.member_capacity_snapshot }, (_, i) => i + 1).filter((n) => !used.includes(n));
     return free[Math.floor(Math.random() * free.length)]!;
   }
 }

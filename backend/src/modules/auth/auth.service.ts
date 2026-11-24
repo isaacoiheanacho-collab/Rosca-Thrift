@@ -5,7 +5,7 @@
  * user creation. If consent recording fails, the whole registration rolls back.
  */
 
-import { withTransaction } from '../../db';
+import { withTransaction, pool } from '../../db';
 import { env } from '../../config/env';
 import { logger } from '../../logger';
 import { AppError, ConflictError, NotFoundError } from '../../errors';
@@ -101,6 +101,23 @@ export class AuthService {
       branchId = branch.id;
     }
 
+    let selectedConfigurationId: string | null = null;
+    if (branchId) {
+      const configurations = await pool.query<{ id: string }>(
+        `SELECT id FROM circle_configurations WHERE branch_id = $1 ORDER BY created_at ASC`,
+        [branchId],
+      );
+      if (input.circleConfigurationId) {
+        const selected = configurations.rows.find((c) => c.id === input.circleConfigurationId);
+        if (!selected) throw new AppError({ code: 'AUTH_CIRCLE_CONFIGURATION_INVALID', httpStatus: 400, message: 'Selected circle configuration is not available for this community' });
+        selectedConfigurationId = selected.id;
+      } else if (configurations.rows.filter((c) => !c.is_legacy).length === 1) {
+        selectedConfigurationId = configurations.rows.find((c) => !c.is_legacy)!.id;
+      } else if (configurations.rows.filter((c: any) => !c.is_legacy).length > 1) {
+        throw new AppError({ code: 'AUTH_CIRCLE_CONFIGURATION_REQUIRED', httpStatus: 400, message: 'Select a savings circle configuration before registering' });
+      }
+    }
+
     const existing = await authRepository.findUserByPhone(input.phone);
     if (existing) {
       throw new ConflictError('Phone number is already registered', 'AUTH_PHONE_TAKEN');
@@ -137,7 +154,9 @@ export class AuthService {
         },
         tx,
       );
-      void tx;
+      if (selectedConfigurationId) {
+        await tx.query('UPDATE users SET circle_configuration_id = $2 WHERE id = $1', [created.id, selectedConfigurationId]);
+      }
       return created;
     });
 

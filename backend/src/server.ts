@@ -44,6 +44,8 @@ import {
   notificationsRouter,
   superAdminStatsRouter,
   branchAdminStatsRouter,
+  publicCircleConfigurationsRouter,
+  branchAdminCircleConfigurationsRouter,
 } from './modules';
 import authSessionsRouter from './modules/auth/auth.sessions';
 
@@ -100,6 +102,8 @@ app.use('/api/auth', authLimiter, authRoutes);
 app.use('/api/auth/sessions', generalLimiter, authSessionsRouter);
 app.use('/api/users', usersRoutes);
 app.use('/api/branches', publicBranchesRouter);
+app.use('/api/circle-configurations', publicCircleConfigurationsRouter);
+app.use('/api/branch-admin/circle-configurations', branchAdminCircleConfigurationsRouter);
 app.use('/api/branches', branchTrustAccountRouter);
 
 // ---- KYC ----

@@ -14,7 +14,7 @@ export const TenantIdParamSchema = z.object({
 
 export const ReplacementBodySchema = z.object({
   /** The renewal row's slot number to fill. */
-  slotNumber: z.coerce.number().int().min(1).max(12),
+  slotNumber: z.coerce.number().int().min(1).max(100),
   /** The user being assigned as replacement. Must be verified, unassigned, same branch. */
   newUserId: z.string().uuid('Invalid user ID'),
 });

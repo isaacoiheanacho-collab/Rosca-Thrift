@@ -3,7 +3,6 @@
  */
 
 import { pool } from '../../db';
-import { env } from '../../config/env';
 
 export type TenantStatus = 'FILLING' | 'ACTIVE' | 'COMPLETED' | 'ARCHIVED';
 export type MembershipStatus = 'ACTIVE' | 'COLLECTED' | 'REMOVED';
@@ -12,6 +11,10 @@ export type RenewalState = 'NONE' | 'VOTING' | 'REPLACING' | 'READY' | 'RENEWED'
 export interface TenantRow {
   id: string;
   branch_id: string;
+  configuration_id: string;
+  member_capacity_snapshot: number;
+  cycle_duration_days_snapshot: number;
+  contribution_window_days_snapshot: number;
   name: string | null;
   status: TenantStatus;
   current_cycle: number;
@@ -57,13 +60,13 @@ export class TenantsRepository {
     return result.rows[0] ?? null;
   }
 
-  async findOpenByBranch(branchId: string): Promise<TenantRow | null> {
+  async findOpenByConfiguration(branchId: string, configurationId: string): Promise<TenantRow | null> {
     const result = await pool.query<TenantRow>(
       `SELECT * FROM tenants
-       WHERE branch_id = $1 AND status = 'FILLING'
+       WHERE branch_id = $1 AND configuration_id = $2 AND status = 'FILLING'
        ORDER BY created_at ASC
        LIMIT 1`,
-      [branchId],
+      [branchId, configurationId],
     );
     return result.rows[0] ?? null;
   }
@@ -73,13 +76,13 @@ export class TenantsRepository {
    * (renewal_state = REPLACING). Used by the provisioning service to
    * prioritize replacing tenants over fresh FILLING tenants.
    */
-  async findReplacingByBranch(branchId: string): Promise<TenantRow | null> {
+  async findReplacingByConfiguration(branchId: string, configurationId: string): Promise<TenantRow | null> {
     const result = await pool.query<TenantRow>(
       `SELECT * FROM tenants
-       WHERE branch_id = $1 AND renewal_state = 'REPLACING'
+       WHERE branch_id = $1 AND configuration_id = $2 AND renewal_state = 'REPLACING'
        ORDER BY renewal_opened_at ASC NULLS LAST
        LIMIT 1`,
-      [branchId],
+      [branchId, configurationId],
     );
     return result.rows[0] ?? null;
   }
@@ -119,12 +122,12 @@ export class TenantsRepository {
     return { tenants: listResult.rows, total };
   }
 
-  async insert(branchId: string, name: string | null): Promise<TenantRow> {
+  async insert(branchId: string, configurationId: string, capacity: number, cycleDurationDays: number, contributionWindowDays: number, name: string | null): Promise<TenantRow> {
     const result = await pool.query<TenantRow>(
-      `INSERT INTO tenants (branch_id, name, status)
-       VALUES ($1, $2, 'FILLING')
+      `INSERT INTO tenants (branch_id, configuration_id, member_capacity_snapshot, cycle_duration_days_snapshot, contribution_window_days_snapshot, name, status)
+       VALUES ($1, $2, $3, $4, $5, $6, 'FILLING')
        RETURNING *`,
-      [branchId, name],
+      [branchId, configurationId, capacity, cycleDurationDays, contributionWindowDays, name],
     );
     return result.rows[0]!;
   }
@@ -139,8 +142,14 @@ export class TenantsRepository {
 
     if (opts.activate) {
       fields.push('activated_at = NOW()');
-      fields.push(`current_tenure_tvc_bps = ${params.length + 1}`);
-      params.push(env.TVC_ANNUAL_BPS);
+      fields.push('current_tenure = 1');
+      fields.push('current_cycle = 1');
+      fields.push('cycle_started_at = NOW()');
+      fields.push("cycle_ends_at = NOW() + (cycle_duration_days_snapshot * INTERVAL '1 day')");
+      fields.push("cycle_contribution_deadline_at = NOW() + (contribution_window_days_snapshot * INTERVAL '1 day')");
+      fields.push("cycle_payout_at = NOW() + (cycle_duration_days_snapshot * INTERVAL '1 day')");
+      fields.push('tenure_started_at = NOW()');
+      fields.push('current_tenure_tvc_bps = 0');
     }
     if (opts.complete) {
       fields.push('completed_at = NOW()');

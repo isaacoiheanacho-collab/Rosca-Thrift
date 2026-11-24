@@ -36,7 +36,7 @@ export const ListPendingSchema = z.object({
   limit: z.coerce.number().int().min(1).max(100).default(50),
   offset: z.coerce.number().int().min(0).default(0),
   tenantId: z.string().uuid().optional(),
-  cycle: z.coerce.number().int().min(1).max(12).optional(),
+  cycle: z.coerce.number().int().min(1).max(100).optional(),
 });
 
 /** Query params for listing confirmed contributions (admin). */
