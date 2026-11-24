@@ -268,6 +268,7 @@ export class PayoutsService {
       limit: number;
       offset: number;
       state?: PayoutIntentState;
+      tenantId?: string;
     },
   ): Promise<{ intents: PayoutIntentDto[]; total: number }> {
     const { intents, total } = await payoutsRepository.listPayoutsByBranch(branchId, options);

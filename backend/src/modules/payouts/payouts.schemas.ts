@@ -56,6 +56,7 @@ export const ListPayoutsQuerySchema = z.object({
     .enum(['PENDING', 'FEE_PAID', 'RECEIPT_UPLOADED', 'CONFIRMED', 'FAILED'])
     .optional(),
   branchId: z.string().uuid().optional(),
+  tenantId: z.string().uuid().optional(),
 });
 
 export const ListFeesQuerySchema = z.object({
