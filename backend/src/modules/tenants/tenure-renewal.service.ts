@@ -85,7 +85,7 @@ export class TenureRenewalService {
     }
 
     const memberships = await tenantsRepository.findMembershipsByTenant(tenantId);
-    if (memberships.length !== 12) {
+    if (memberships.length !== tenant.member_capacity_snapshot) {
       logger.warn(
         { tenantId, count: memberships.length },
         'Cannot open renewal: tenant does not have 12 memberships',
@@ -262,7 +262,7 @@ export class TenureRenewalService {
       tenant.current_tenure,
     );
 
-    if (counts.yes === 12) {
+    if (counts.yes === tenant.member_capacity_snapshot) {
       await this.activateNextTenure(tenantId);
       return;
     }
@@ -309,13 +309,14 @@ export class TenureRenewalService {
   async tryAssignReplacement(
     branchId: string,
     newUserId: string,
+    configurationId: string,
   ): Promise<{ tenantId: string; slotNumber: number } | null> {
     const result = await pool.query<TenantRow>(
       `SELECT * FROM tenants
-       WHERE branch_id = $1 AND renewal_state = 'REPLACING'
+       WHERE branch_id = $1 AND configuration_id = $2 AND renewal_state = 'REPLACING'
        ORDER BY renewal_opened_at ASC
        LIMIT 1`,
-      [branchId],
+      [branchId, configurationId],
     );
     const tenant = result.rows[0];
     if (!tenant) return null;
