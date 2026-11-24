@@ -76,7 +76,7 @@ export class CircleConfigurationsService {
        input.contributionWindowDays, input.cycleDurationDays],
     );
     if (duplicate.rowCount) {
-      throw new ConflictError('A configuration with these material settings already exists', 'CIRCLE_CONFIGURATION_DUPLICATE');
+      throw new ConflictError('A configuration with this name or these material settings already exists', 'CIRCLE_CONFIGURATION_DUPLICATE');
     }
     try {
       const result = await pool.query<CircleConfiguration>(
@@ -112,6 +112,7 @@ export class CircleConfigurationsService {
       collectionPositions: row.collection_positions,
       contributionWindowDays: row.contribution_window_days,
       cycleDurationDays: row.cycle_duration_days,
+      tenureDurationDays: row.cycle_duration_days * row.member_capacity,
       tenantCount: row.tenant_count === undefined ? undefined : Number(row.tenant_count),
       fillingCount: row.filling_count === undefined ? undefined : Number(row.filling_count),
       createdAt: row.created_at.toISOString(),
