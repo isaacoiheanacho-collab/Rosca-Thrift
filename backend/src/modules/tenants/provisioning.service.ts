@@ -191,14 +191,14 @@ export class ProvisioningService {
                current_tenure = 1,
                current_cycle = 1,
                cycle_started_at = NOW(),
-               cycle_ends_at = NOW() + ($4 * INTERVAL '1 day'),
-               cycle_contribution_deadline_at = NOW() + ($5 * INTERVAL '1 day'),
-               cycle_payout_at = NOW() + ($4 * INTERVAL '1 day'),
+               cycle_ends_at = NOW() + ($3 * INTERVAL '1 day'),
+               cycle_contribution_deadline_at = NOW() + ($4 * INTERVAL '1 day'),
+               cycle_payout_at = NOW() + ($3 * INTERVAL '1 day'),
                current_tenure_fee_bps = $2,
                current_tenure_tvc_bps = 0,
                tenure_started_at = NOW()
            WHERE id = $1 AND status = 'FILLING'`,
-          [tenant!.id, env.PLATFORM_FEE_BPS, 0, config.cycle_duration_days, config.contribution_window_days]
+          [tenant!.id, env.PLATFORM_FEE_BPS, config.cycle_duration_days, config.contribution_window_days]
         );
         activated = true;
       }
