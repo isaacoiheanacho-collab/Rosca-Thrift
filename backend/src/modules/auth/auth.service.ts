@@ -103,7 +103,7 @@ export class AuthService {
 
     let selectedConfigurationId: string | null = null;
     if (branchId) {
-      const configurations = await pool.query<{ id: string }>(
+      const configurations = await pool.query<{ id: string; is_legacy: boolean }>(
         `SELECT id FROM circle_configurations WHERE branch_id = $1 ORDER BY created_at ASC`,
         [branchId],
       );
