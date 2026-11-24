@@ -38,8 +38,8 @@ export interface ProvisionResult {
   assignedAsReplacement?: boolean;
 }
 
-function pickRandomFreeSlot(used: number[]): number | null {
-  const free = Array.from({ length: 12 }, (_, i) => i + 1).filter((n) => !used.includes(n));
+function pickRandomFreeSlot(used: number[], capacity: number): number | null {
+  const free = Array.from({ length: capacity }, (_, i) => i + 1).filter((n) => !used.includes(n));
   if (free.length === 0) return null;
   return free[Math.floor(Math.random() * free.length)]!;
 }
@@ -63,6 +63,20 @@ export class ProvisioningService {
       };
     }
 
+    const selection = await pool.query<{ circle_configuration_id: string | null }>('SELECT circle_configuration_id FROM users WHERE id = $1', [userId]);
+    let configurationId = selection.rows[0]?.circle_configuration_id ?? null;
+    if (!configurationId) {
+      const legacy = await pool.query<{ id: string }>("SELECT id FROM circle_configurations WHERE branch_id = $1 AND is_legacy = TRUE LIMIT 1", [branchId]);
+      configurationId = legacy.rows[0]?.id ?? null;
+    }
+    if (!configurationId) throw new Error('No circle configuration selected for this saver');
+    const configResult = await pool.query<{ member_capacity: number; contribution_amount: string; contribution_window_days: number; cycle_duration_days: number; name: string }>(
+      'SELECT member_capacity, contribution_amount::text, contribution_window_days, cycle_duration_days, name FROM circle_configurations WHERE id = $1 AND branch_id = $2',
+      [configurationId, branchId],
+    );
+    const config = configResult.rows[0];
+    if (!config) throw new Error('Selected circle configuration does not belong to this branch');
+
     // 2. Already provisioned?
     const existing = await tenantsRepository.findMembershipByUser(userId);
     if (existing) {
@@ -77,9 +91,9 @@ export class ProvisioningService {
     }
 
     // 3. Priority: renewing tenant waiting for a replacement?
-    const replacing = await tenantsRepository.findReplacingByBranch(branchId);
+    const replacing = await tenantsRepository.findReplacingByConfiguration(branchId, configurationId);
     if (replacing) {
-      const result = await tenureRenewalService.tryAssignReplacement(branchId, userId);
+      const result = await tenureRenewalService.tryAssignReplacement(branchId, userId, configurationId);
       if (result) {
         logger.info(
           { userId, tenantId: result.tenantId, slotNumber: result.slotNumber },
@@ -99,21 +113,21 @@ export class ProvisioningService {
     }
 
     // 4. Find or create FILLING tenant
-    let tenant: TenantRow | null = await tenantsRepository.findOpenByBranch(branchId);
+    let tenant: TenantRow | null = await tenantsRepository.findOpenByConfiguration(branchId, configurationId);
     let createdNewTenant = false;
 
     if (!tenant) {
       // Count existing tenants to generate a sequential name (e.g., Tenant 01)
       const countRes = await pool.query<{ count: string }>(
-        `SELECT COUNT(*)::text AS count FROM tenants WHERE branch_id = $1`,
-        [branchId]
+        `SELECT COUNT(*)::text AS count FROM tenants WHERE branch_id = $1 AND configuration_id = $2`,
+        [branchId, configurationId]
       );
       const tenantCount = Number(countRes.rows[0]?.count ?? '0');
       
       // Pad with zero: Tenant 01, Tenant 02
-      const tenantName = `Tenant ${String(tenantCount + 1).padStart(2, '0')}`;
+      const tenantName = `${config.name} ${String(tenantCount + 1).padStart(2, '0')}`;
 
-      tenant = await tenantsRepository.insert(branchId, tenantName);
+      tenant = await tenantsRepository.insert(branchId, configurationId, config.member_capacity, tenantName);
       createdNewTenant = true;
 
       await record({
@@ -121,7 +135,7 @@ export class ProvisioningService {
         action: 'TENANT_CREATED',
         entityType: 'tenant',
         entityId: tenant.id,
-        metadata: { branchId, reason: 'auto-provisioning', tenantName },
+        metadata: { branchId, configurationId, reason: 'auto-provisioning', tenantName },
       });
 
       logger.info({ tenantId: tenant.id, branchId, tenantName }, 'Tenant auto-created');
@@ -136,7 +150,7 @@ export class ProvisioningService {
       );
       const used = usedSlotsRes.rows.map((r) => r.slot_number);
 
-      const slot = pickRandomFreeSlot(used);
+      const slot = pickRandomFreeSlot(used, tenant!.member_capacity_snapshot);
       if (slot === null) {
         throw new Error(`Tenant ${tenant!.id} unexpectedly full during provisioning`);
       }
@@ -158,7 +172,7 @@ export class ProvisioningService {
 
       let activated = false;
 
-      if (memberCount >= 12 && tenant!.status === 'FILLING') {
+      if (memberCount >= tenant!.member_capacity_snapshot && tenant!.status === 'FILLING') {
         // Set activation + cycle + snapshot tenure rates
         await tx.query(
           `UPDATE tenants
@@ -167,14 +181,14 @@ export class ProvisioningService {
                current_tenure = 1,
                current_cycle = 1,
                cycle_started_at = NOW(),
-               cycle_ends_at = NOW() + INTERVAL '30 days',
-               cycle_contribution_deadline_at = NOW() + INTERVAL '21 days',
-               cycle_payout_at = NOW() + INTERVAL '30 days',
+               cycle_ends_at = NOW() + ($4 * INTERVAL '1 day'),
+               cycle_contribution_deadline_at = NOW() + ($5 * INTERVAL '1 day'),
+               cycle_payout_at = NOW() + ($4 * INTERVAL '1 day'),
                current_tenure_fee_bps = $2,
-               current_tenure_tvc_bps = $3,
+               current_tenure_tvc_bps = 0,
                tenure_started_at = NOW()
            WHERE id = $1 AND status = 'FILLING'`,
-          [tenant!.id, env.PLATFORM_FEE_BPS, env.TVC_ANNUAL_BPS]
+          [tenant!.id, env.PLATFORM_FEE_BPS, 0, config.cycle_duration_days, config.contribution_window_days]
         );
         activated = true;
       }
@@ -200,7 +214,7 @@ export class ProvisioningService {
             metadata: {
               memberCount,
               feeBps: env.PLATFORM_FEE_BPS,
-              tvcBps: env.TVC_ANNUAL_BPS,
+              tvcBps: 0,
             },
           },
           tx
