@@ -24,8 +24,7 @@ WHERE contribution_window_days IS DISTINCT FROM CASE
 -- tenants, correct only the current cycle's schedule timestamps from its
 -- original start; completed tenants and historical payouts remain untouched.
 UPDATE tenants t
-SET member_capacity_snapshot = c.member_capacity,
-    contribution_window_days_snapshot = c.contribution_window_days,
+SET contribution_window_days_snapshot = c.contribution_window_days,
     cycle_duration_days_snapshot = c.cycle_duration_days,
     cycle_contribution_deadline_at = CASE
       WHEN t.status = 'ACTIVE' AND t.cycle_started_at IS NOT NULL
