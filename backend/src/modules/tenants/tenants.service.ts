@@ -297,6 +297,8 @@ export class TenantsService {
   }
 
   async pickRandomFreeSlot(tenantId: string): Promise<number> {
+    const tenant = await tenantsRepository.findById(tenantId);
+    if (!tenant) throw new NotFoundError('Tenant');
     const used = await tenantsRepository.usedSlots(tenantId);
     if (used.length >= tenant.member_capacity_snapshot) {
       throw new AppError({
