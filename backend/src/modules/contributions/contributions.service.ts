@@ -4,7 +4,6 @@
  */
 
 import { logger } from '../../logger';
-import { env } from '../../config/env';
 import { withTransaction, pool } from '../../db';
 import { AppError, ConflictError, NotFoundError } from '../../errors';
 import { uploadObject, getPresignedDownloadUrl } from '../../utils/s3';
