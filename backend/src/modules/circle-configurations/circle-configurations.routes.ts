@@ -10,11 +10,9 @@ const CreateSchema = z.object({
   contributionAmountPence: z.string().regex(/^[1-9][0-9]*$/),
   contributionFrequency: z.enum(['WEEKLY','MONTHLY']),
   memberCapacity: z.number().int().min(2).max(100),
-  contributionWindowDays: z.number().int().min(1).max(90),
-  cycleDurationDays: z.number().int().min(1).max(120),
-}).refine((v) => v.contributionWindowDays <= v.cycleDurationDays, {
-  message: 'Contribution window cannot exceed circle cycle duration',
-  path: ['contributionWindowDays'],
+  // Legacy clients may still send these; the service always derives canonical values.
+  contributionWindowDays: z.number().int().min(1).max(90).optional(),
+  cycleDurationDays: z.number().int().min(1).max(120).optional(),
 });
 
 export const publicCircleConfigurationsRouter = Router();
