@@ -105,17 +105,19 @@ export class AuthService {
     if (branchId) {
       const { pool } = await import('../../db');
       const configurations = await pool.query<{ id: string }>(
-        `SELECT id FROM circle_configurations WHERE branch_id = $1 AND is_legacy = FALSE ORDER BY created_at ASC`,
+        `SELECT id, is_legacy FROM circle_configurations WHERE branch_id = $1 ORDER BY created_at ASC`,
         [branchId],
       );
       if (input.circleConfigurationId) {
         const selected = configurations.rows.find((c) => c.id === input.circleConfigurationId);
         if (!selected) throw new AppError({ code: 'AUTH_CIRCLE_CONFIGURATION_INVALID', httpStatus: 400, message: 'Selected circle configuration is not available for this community' });
         selectedConfigurationId = selected.id;
-      } else if (configurations.rows.length === 1) {
-        selectedConfigurationId = configurations.rows[0]!.id;
-      } else if (configurations.rows.length > 1) {
+      } else if (configurations.rows.filter((c: any) => !c.is_legacy).length === 1) {
+        selectedConfigurationId = configurations.rows.find((c: any) => !c.is_legacy)!.id;
+      } else if (configurations.rows.filter((c: any) => !c.is_legacy).length > 1) {
         throw new AppError({ code: 'AUTH_CIRCLE_CONFIGURATION_REQUIRED', httpStatus: 400, message: 'Select a savings circle configuration before registering' });
+      } else {
+        selectedConfigurationId = configurations.rows.find((c: any) => c.is_legacy)?.id ?? null;
       }
     }
 
