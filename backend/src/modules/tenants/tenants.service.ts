@@ -270,6 +270,9 @@ export class TenantsService {
     }
 
     const used = await tenantsRepository.usedSlots(tenantId);
+    if (slotNumber < 1 || slotNumber > tenant.member_capacity_snapshot) {
+      throw new ConflictError('Slot is outside this circle configuration capacity', 'TENANT_SLOT_OUT_OF_RANGE');
+    }
     if (used.includes(slotNumber)) {
       throw new ConflictError(`Slot ${slotNumber} is taken`, 'TENANT_SLOT_TAKEN');
     }
