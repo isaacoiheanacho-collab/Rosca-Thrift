@@ -403,6 +403,7 @@ export class PayoutsRepository {
       limit: number;
       offset: number;
       state?: PayoutIntentState;
+      tenantId?: string;
     },
   ): Promise<{ intents: PayoutIntentRow[]; total: number }> {
     const conditions: string[] = ['branch_id = $1'];
@@ -411,6 +412,11 @@ export class PayoutsRepository {
     if (options.state) {
       params.push(options.state);
       conditions.push(`state = $${params.length}`);
+    }
+
+    if (options.tenantId) {
+      params.push(options.tenantId);
+      conditions.push('tenant_id = $' + params.length);
     }
 
     const where = `WHERE ${conditions.join(' AND ')}`;
