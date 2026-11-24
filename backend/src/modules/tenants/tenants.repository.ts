@@ -142,6 +142,13 @@ export class TenantsRepository {
 
     if (opts.activate) {
       fields.push('activated_at = NOW()');
+      fields.push('current_tenure = 1');
+      fields.push('current_cycle = 1');
+      fields.push('cycle_started_at = NOW()');
+      fields.push("cycle_ends_at = NOW() + (cycle_duration_days_snapshot * INTERVAL '1 day')");
+      fields.push("cycle_contribution_deadline_at = NOW() + (contribution_window_days_snapshot * INTERVAL '1 day')");
+      fields.push("cycle_payout_at = NOW() + (cycle_duration_days_snapshot * INTERVAL '1 day')");
+      fields.push('tenure_started_at = NOW()');
       fields.push('current_tenure_tvc_bps = 0');
     }
     if (opts.complete) {
