@@ -82,6 +82,9 @@ ALTER TABLE tenants
   ADD CONSTRAINT tenants_cycle_duration_snapshot_valid CHECK (cycle_duration_days_snapshot > 0),
   ADD CONSTRAINT tenants_contribution_window_snapshot_valid CHECK (contribution_window_days_snapshot > 0 AND contribution_window_days_snapshot <= cycle_duration_days_snapshot);
 
+-- Retire the former annual TVC rate snapshot for future payout records. Existing payout records remain untouched.
+UPDATE tenants SET current_tenure_tvc_bps = 0;
+
 -- Capacity is now tenant-specific. Drop the original fixed 1..12 slot check.
 ALTER TABLE tenant_memberships
   DROP CONSTRAINT IF EXISTS tenant_memberships_slot_number_check;
