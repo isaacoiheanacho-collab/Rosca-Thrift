@@ -13,6 +13,8 @@ export interface TenantRow {
   branch_id: string;
   configuration_id: string;
   member_capacity_snapshot: number;
+  cycle_duration_days_snapshot: number;
+  contribution_window_days_snapshot: number;
   name: string | null;
   status: TenantStatus;
   current_cycle: number;
