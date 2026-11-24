@@ -68,7 +68,7 @@ export class CircleConfigurationsService {
     }
     const duplicate = await pool.query(
       `SELECT id FROM circle_configurations
-       WHERE branch_id = $1 AND is_legacy = FALSE
+       WHERE branch_id = $1
          AND contribution_amount = $2 AND contribution_frequency = $3
          AND member_capacity = $4 AND contribution_window_days = $5
          AND cycle_duration_days = $6`,
