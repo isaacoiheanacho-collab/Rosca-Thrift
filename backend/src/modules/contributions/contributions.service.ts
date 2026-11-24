@@ -571,6 +571,8 @@ export class ContributionsService {
     if (intent.state === 'EXEMPT') {
       throw new ConflictError('This intent is marked exempt', 'CONTRIB_EXEMPT');
     }
+    const tenant = await tenantsRepository.findById(intent.tenant_id);
+    if (!tenant) throw new NotFoundError('Tenant');
 
     const created = await withTransaction(async (tx) => {
       const contribution = await contributionsRepository.insertContribution(
