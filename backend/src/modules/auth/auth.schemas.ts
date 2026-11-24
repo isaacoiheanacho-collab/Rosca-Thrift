@@ -46,6 +46,7 @@ export const RegisterSchema = z.object({
   password: PasswordSchema,
   fullName: FullNameSchema,
   branchSlug: SlugSchema.optional(),
+  circleConfigurationId: z.string().uuid().optional(),
   consents: z.object({
     terms: ConsentItemSchema,
     privacy: ConsentItemSchema,
