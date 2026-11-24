@@ -250,6 +250,16 @@ export class BranchesService {
         },
         tx,
       );
+      // Preserve the existing default 12-member arrangement for newly
+      // onboarded branches. Admins can add additional configurations later.
+      await tx.query(
+        `INSERT INTO circle_configurations
+          (branch_id, name, contribution_amount, contribution_frequency,
+           member_capacity, collection_positions, contribution_window_days,
+           cycle_duration_days, is_legacy)
+         VALUES ($1, 'Legacy 12-member configuration', $2, 'MONTHLY', 12, 12, 21, 30, TRUE)`,
+        [createdBranch.id, env.CONTRIBUTION_PENCE],
+      );
 
       // Create the admin user
       const admin = await authRepository.insertUser(
