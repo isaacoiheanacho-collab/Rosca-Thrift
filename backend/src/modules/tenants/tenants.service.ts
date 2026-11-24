@@ -29,6 +29,11 @@ export interface TenantDto {
   branchId: string;
   configurationId: string;
   memberCapacity: number;
+  configurationName: string;
+  contributionAmountPence: string;
+  contributionFrequency: string;
+  contributionWindowDays: number;
+  cycleDurationDays: number;
   name: string | null;
   status: TenantStatus;
   currentCycle: number;
@@ -70,11 +75,18 @@ export interface BranchSummaryDto {
 
 async function toTenantDto(row: TenantRow): Promise<TenantDto> {
   const memberCount = await tenantsRepository.countMembers(row.id);
+  const configResult = await (await import('../../db')).pool.query<{name:string;contribution_amount:string;contribution_frequency:string}>('SELECT name, contribution_amount::text, contribution_frequency FROM circle_configurations WHERE id = $1', [row.configuration_id]);
+  const config = configResult.rows[0];
   return {
     id: row.id,
     branchId: row.branch_id,
     configurationId: row.configuration_id,
     memberCapacity: row.member_capacity_snapshot,
+    configurationName: config?.name ?? 'Circle',
+    contributionAmountPence: config?.contribution_amount ?? '0',
+    contributionFrequency: config?.contribution_frequency ?? 'MONTHLY',
+    contributionWindowDays: row.contribution_window_days_snapshot,
+    cycleDurationDays: row.cycle_duration_days_snapshot,
     name: row.name,
     status: row.status,
     currentCycle: row.current_cycle,
