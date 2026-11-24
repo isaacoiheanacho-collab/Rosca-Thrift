@@ -42,7 +42,7 @@ export class CircleConfigurationsService {
        ORDER BY created_at ASC`,
       [branch.rows[0].id],
     );
-    return result.rows.map(this.toDto);
+    return result.rows.map((row) => this.toDto(row));
   }
 
   async listForAdmin(branchId: string) {
@@ -55,7 +55,7 @@ export class CircleConfigurationsService {
        ORDER BY c.created_at ASC`,
       [branchId],
     );
-    return result.rows.map(this.toDto);
+    return result.rows.map((row) => this.toDto(row));
   }
 
   async create(branchId: string, input: CreateCircleConfigurationInput, actorId: string) {
