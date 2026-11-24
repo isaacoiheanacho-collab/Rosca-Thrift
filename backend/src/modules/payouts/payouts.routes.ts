@@ -148,12 +148,14 @@ branchAdminPayoutsRouter.get(
         offset: number;
         state?: 'PENDING' | 'FEE_PAID' | 'RECEIPT_UPLOADED' | 'CONFIRMED' | 'FAILED';
         branchId?: string;
+        tenantId?: string;
       };
       const branchId = resolveBranchScope(req);
       const result = await payoutsService.listPayoutsByBranch(branchId, {
         limit: q.limit,
         offset: q.offset,
         state: q.state,
+        tenantId: q.tenantId,
       });
       res.json({ ok: true, data: { ...result, limit: q.limit, offset: q.offset } });
     } catch (err) {
