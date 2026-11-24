@@ -23,7 +23,6 @@
  */
 
 import { logger } from '../../logger';
-import { env } from '../../config/env';
 import { pool, withTransaction } from '../../db';
 import { AppError, ConflictError, NotFoundError } from '../../errors';
 import { record } from '../audit/audit.service';
