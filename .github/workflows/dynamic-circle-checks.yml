@@ -1,0 +1,28 @@
+name: Dynamic circle upgrade checks
+on:
+  push:
+    branches: [feature/dynamic-circle-configurations]
+    paths:
+      - 'backend/**'
+      - '.github/workflows/dynamic-circle-checks.yml'
+  pull_request:
+    paths:
+      - 'backend/**'
+      - '.github/workflows/dynamic-circle-checks.yml'
+jobs:
+  backend:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - name: Install dependencies
+        working-directory: backend
+        run: npm install --no-package-lock
+      - name: Type-check backend
+        working-directory: backend
+        run: npm run typecheck
+      - name: Test dynamic TVC calculations
+        working-directory: backend
+        run: npm run test:dynamic-tvc
