@@ -46,7 +46,7 @@ INSERT INTO circle_configurations (
 )
 SELECT
   b.id,
-  'Legacy 12-member configuration',
+  '12-member configuration',
   __LEGACY_CONTRIBUTION_PENCE__,
   'MONTHLY',
   12,
