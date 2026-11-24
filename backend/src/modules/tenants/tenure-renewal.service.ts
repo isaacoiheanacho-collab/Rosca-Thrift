@@ -506,9 +506,9 @@ export class TenureRenewalService {
 
     const fillingRes = await pool.query<TenantRow>(
       `SELECT * FROM tenants
-       WHERE branch_id = $1 AND status = 'FILLING' AND id != $2
+       WHERE branch_id = $1 AND configuration_id = $3 AND status = 'FILLING' AND id != $2
        ORDER BY created_at ASC`,
-      [tenant.branch_id, tenantId],
+      [tenant.branch_id, tenantId, tenant.configuration_id],
     );
     const fillingTenants = fillingRes.rows;
 
