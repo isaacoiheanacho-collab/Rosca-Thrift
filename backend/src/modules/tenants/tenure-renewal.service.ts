@@ -3,14 +3,14 @@
  *
  * Lifecycle:
  *   NONE       -> normal operating tenant (in-tenure)
- *   VOTING     -> cycle 12 done, 7-day vote window open
+ *   VOTING     -> final configured cycle done, 7-day vote window open
  *   REPLACING  -> at least one NO vote; 7-day fill window open
- *   READY      -> 12 slots confirmed for next tenure; ready to activate
+ *   READY      -> all configured slots confirmed for next tenure; ready to activate
  *   RENEWED    -> tenure 2+ active
- *   DISSOLVED  -> could not reach 12; admin closed it
+ *   DISSOLVED  -> could not reach configured capacity; admin closed it
  *
  * Called from:
- *   - cycleAdvancementService (opens renewal on cycle 12)
+ *   - cycleAdvancementService (opens renewal on the configured final cycle)
  *   - provisioner (checks for REPLACING tenant before FILLING)
  *   - lazy trigger on dashboard load (checks window expiry)
  *
@@ -71,7 +71,7 @@ const FILL_WINDOW_DAYS = 7;
 
 export class TenureRenewalService {
   // ---------------------------------------------------------------
-  // Step 1: open renewal after cycle 12 payout confirmed
+  // Step 1: open renewal after final configured cycle payout confirmed
   // ---------------------------------------------------------------
 
   async openRenewalForTenant(tenantId: string): Promise<void> {
@@ -87,7 +87,7 @@ export class TenureRenewalService {
     if (memberships.length !== tenant.member_capacity_snapshot) {
       logger.warn(
         { tenantId, count: memberships.length },
-        'Cannot open renewal: tenant does not have 12 memberships',
+        'Cannot open renewal: tenant membership count does not match configured capacity',
       );
       return;
     }
@@ -479,7 +479,7 @@ export class TenureRenewalService {
 
     const tenant = await tenantsRepository.findById(tenantId);
     // NOTE: no eager intent generation here. Payout intents for cycle 1
-    // of the new tenure are generated when 12 contributions are confirmed.
+    // of the new tenure are generated when the configured contribution count is confirmed.
 
     // Notify all tenant members (best-effort)
     if (renewed && tenant) {
