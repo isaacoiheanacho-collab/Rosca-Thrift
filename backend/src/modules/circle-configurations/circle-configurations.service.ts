@@ -75,10 +75,8 @@ export class CircleConfigurationsService {
       `SELECT id FROM circle_configurations
        WHERE branch_id = $1
          AND contribution_amount = $2 AND contribution_frequency = $3
-         AND member_capacity = $4 AND contribution_window_days = $5
-         AND cycle_duration_days = $6`,
-      [branchId, amount.toString(), input.contributionFrequency, input.memberCapacity,
-       schedule.contributionWindowDays, schedule.cycleDurationDays],
+         AND member_capacity = $4`,
+      [branchId, amount.toString(), input.contributionFrequency, input.memberCapacity],
     );
     if (duplicate.rowCount) {
       throw new ConflictError('A configuration with this name or these material settings already exists', 'CIRCLE_CONFIGURATION_DUPLICATE');
