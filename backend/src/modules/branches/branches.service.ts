@@ -192,7 +192,7 @@ export class BranchesService {
           (branch_id, name, contribution_amount, contribution_frequency,
            member_capacity, collection_positions, contribution_window_days,
            cycle_duration_days, is_legacy)
-         VALUES ($1, 'Legacy 12-member configuration', $2, 'MONTHLY', 12, 12, 21, 30, TRUE)`,
+         VALUES ($1, '12-member configuration', $2, 'MONTHLY', 12, 12, 21, 30, TRUE)`,
         [created.id, env.CONTRIBUTION_PENCE],
       );
       return created;
