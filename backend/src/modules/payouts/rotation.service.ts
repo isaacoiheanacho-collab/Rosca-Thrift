@@ -9,8 +9,7 @@
  */
 
 import { logger } from '../../logger';
-import { env } from '../../config/env';
-import { withTransaction } from '../../db';
+import { withTransaction, pool } from '../../db';
 import { AppError, NotFoundError } from '../../errors';
 import { buildPayoutReference, buildFeeReference } from '../../utils/reference';
 import { tenantsRepository } from '../tenants/tenants.repository';
@@ -79,7 +78,7 @@ export class RotationService {
     }
 
     // Compute amounts
-    const contributionRes = await (await import('../../db')).pool.query<{ contribution_amount: string }>(
+    const contributionRes = await pool.query<{ contribution_amount: string }>(
       'SELECT contribution_amount::text FROM circle_configurations WHERE id = $1',
       [tenant.configuration_id],
     );
