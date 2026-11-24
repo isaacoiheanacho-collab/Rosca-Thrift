@@ -11,17 +11,17 @@
  *   - Check: status=ACTIVE
  *   - Check: current cycle's payout_intent.state = CONFIRMED
  *   - If both true: advance the cycle (increment, reset timestamps)
- *   - If cycle was 12: mark tenure COMPLETE and open renewal vote
+ *   - If the configured final cycle completes: mark tenure COMPLETE and open renewal vote
  *   - If any check fails: silently do nothing (idempotent)
  *
  * Payout + fee intents for the NEW cycle are NOT generated here — they
- * are generated when the 12th contribution for that cycle is confirmed
+ * are generated when all configured contributions for that cycle are confirmed
  * (see contributionsService.confirmContribution). This ensures the pool
  * reflects the actual money collected, not a projection.
  *
  * Notifications:
  *   - After advancing to a new cycle: notify all tenant members
- *   - On cycle 12 completion: renewal service handles its own notifications
+ *   - On final-cycle completion: renewal service handles its own notifications
  */
 
 import { logger } from '../../logger';
@@ -92,7 +92,7 @@ export class CycleAdvancementService {
 
       // Idempotency is enforced by the payout state check above.
       // Once we advance, the NEW cycle's payout will not exist until
-      // 12 contributions are confirmed (and will be PENDING when it does),
+      // all configured contributions are confirmed (and will be PENDING when it does),
       // so the next call will find it absent/not-CONFIRMED and will not
       // double-advance.
 
@@ -157,7 +157,7 @@ export class CycleAdvancementService {
 
     if (result.advanced && result.newCycle && !result.tenantCompleted) {
       // NOTE: payout + fee intents for the new cycle are NOT generated here.
-      // They are generated when the 12th contribution is confirmed
+      // They are generated when the configured contribution count is confirmed
       // (see contributions.service.confirmContribution). This ensures
       // the pool shows the actual money collected, not a projection.
 
