@@ -124,3 +124,8 @@ ALTER TABLE users
 CREATE INDEX IF NOT EXISTS idx_users_circle_configuration
   ON users (circle_configuration_id)
   WHERE circle_configuration_id IS NOT NULL;
+
+-- A configuration has at most one currently filling tenant; this also serializes lazy creation.
+CREATE UNIQUE INDEX IF NOT EXISTS uq_one_filling_tenant_per_configuration
+  ON tenants (configuration_id)
+  WHERE status = 'FILLING';
