@@ -138,19 +138,21 @@ export class ProvisioningService {
         if (!tenant) throw error;
       }
 
-      await record({
-        actorId: null,
-        action: 'TENANT_CREATED',
-        entityType: 'tenant',
-        entityId: tenant.id,
-        metadata: { branchId, configurationId, reason: 'auto-provisioning', tenantName },
-      });
-
-      logger.info({ tenantId: tenant.id, branchId, tenantName }, 'Tenant auto-created');
+      if (createdNewTenant) {
+        await record({
+          actorId: null,
+          action: 'TENANT_CREATED',
+          entityType: 'tenant',
+          entityId: tenant.id,
+          metadata: { branchId, configurationId, reason: 'auto-provisioning', tenantName },
+        });
+        logger.info({ tenantId: tenant.id, branchId, configurationId, tenantName }, 'Tenant auto-created');
+      }
     }
 
     // 5. Assign slot inside a transaction so we never double-book
     const result = await withTransaction(async (tx) => {
+      await tx.query('SELECT id FROM tenants WHERE id = $1 FOR UPDATE', [tenant!.id]);
       const usedSlotsRes = await tx.query<{ slot_number: number }>(
         `SELECT slot_number FROM tenant_memberships
          WHERE tenant_id = $1 AND status != 'REMOVED'`,
