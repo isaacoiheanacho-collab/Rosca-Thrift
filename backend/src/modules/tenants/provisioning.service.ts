@@ -162,7 +162,7 @@ export class ProvisioningService {
 
       const slot = pickRandomFreeSlot(used, tenant!.member_capacity_snapshot);
       if (slot === null) {
-        throw new Error(`Tenant ${tenant!.id} unexpectedly full during provisioning`);
+        return { slot: 0, activated: false, memberCount: used.length, full: true };
       }
 
       const membershipRes = await tx.query<{ id: string; slot_number: number }>(
@@ -231,8 +231,14 @@ export class ProvisioningService {
         );
       }
 
-      return { slot, activated, memberCount };
+      return { slot, activated, memberCount, full: false };
     });
+
+    if (result.full) {
+      // A concurrent provisioner filled this tenant while this request waited
+      // for its row lock. Retry lazily; the next tenant is created only now.
+      return this.provisionUserToTenant(userId, branchId);
+    }
 
     logger.info(
       {
