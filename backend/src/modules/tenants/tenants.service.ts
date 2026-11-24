@@ -238,9 +238,9 @@ export class TenantsService {
     actorId: string,
     meta: RequestMeta,
   ): Promise<TenantDto> {
-    const legacy = await (await import('../../db')).pool.query<{id:string;member_capacity:number}>("SELECT id, member_capacity FROM circle_configurations WHERE branch_id = $1 AND is_legacy = TRUE LIMIT 1", [branchId]);
+    const legacy = await (await import('../../db')).pool.query<{id:string;member_capacity:number;cycle_duration_days:number;contribution_window_days:number}>("SELECT id, member_capacity, cycle_duration_days, contribution_window_days FROM circle_configurations WHERE branch_id = $1 AND is_legacy = TRUE LIMIT 1", [branchId]);
     if (!legacy.rows[0]) throw new NotFoundError('Legacy circle configuration');
-    const tenant = await tenantsRepository.insert(branchId, legacy.rows[0].id, legacy.rows[0].member_capacity, null);
+    const tenant = await tenantsRepository.insert(branchId, legacy.rows[0].id, legacy.rows[0].member_capacity, legacy.rows[0].cycle_duration_days, legacy.rows[0].contribution_window_days, null);
 
     await record({
       actorId,
