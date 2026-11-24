@@ -10,7 +10,7 @@ CREATE TABLE IF NOT EXISTS circle_configurations (
   id                       UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   branch_id                UUID NOT NULL REFERENCES branches(id) ON DELETE RESTRICT,
   name                     TEXT NOT NULL,
-  contribution_amount      BIGINT NOT NULL CHECK (contribution_amount > 0),
+  contribution_amount      BIGINT CHECK (contribution_amount IS NULL OR contribution_amount > 0),
   contribution_frequency   TEXT NOT NULL CHECK (contribution_frequency IN ('WEEKLY', 'MONTHLY')),
   member_capacity          INT NOT NULL CHECK (member_capacity BETWEEN 2 AND 100),
   collection_positions     INT NOT NULL,
@@ -33,7 +33,9 @@ CREATE INDEX IF NOT EXISTS idx_circle_configurations_branch
 ALTER TABLE tenants
   ADD COLUMN IF NOT EXISTS configuration_id UUID
     REFERENCES circle_configurations(id) ON DELETE RESTRICT,
-  ADD COLUMN IF NOT EXISTS member_capacity_snapshot INT;
+  ADD COLUMN IF NOT EXISTS member_capacity_snapshot INT,
+  ADD COLUMN IF NOT EXISTS cycle_duration_days_snapshot INT,
+  ADD COLUMN IF NOT EXISTS contribution_window_days_snapshot INT;
 
 -- One legacy configuration per existing branch. Existing tenants retain their
 -- exact membership and are associated with the legacy 12-member arrangement.
@@ -45,7 +47,7 @@ INSERT INTO circle_configurations (
 SELECT
   b.id,
   'Legacy 12-member configuration',
-  100000,
+  NULL,
   'MONTHLY',
   12,
   12,
@@ -61,7 +63,9 @@ WHERE EXISTS (SELECT 1 FROM tenants t WHERE t.branch_id = b.id)
 
 UPDATE tenants t
 SET configuration_id = c.id,
-    member_capacity_snapshot = 12
+    member_capacity_snapshot = 12,
+    cycle_duration_days_snapshot = 30,
+    contribution_window_days_snapshot = 21
 FROM circle_configurations c
 WHERE c.branch_id = t.branch_id
   AND c.is_legacy = TRUE
@@ -69,11 +73,15 @@ WHERE c.branch_id = t.branch_id
 
 ALTER TABLE tenants
   ALTER COLUMN configuration_id SET NOT NULL,
-  ALTER COLUMN member_capacity_snapshot SET NOT NULL;
+  ALTER COLUMN member_capacity_snapshot SET NOT NULL,
+  ALTER COLUMN cycle_duration_days_snapshot SET NOT NULL,
+  ALTER COLUMN contribution_window_days_snapshot SET NOT NULL;
 
 ALTER TABLE tenants
   ADD CONSTRAINT tenants_member_capacity_snapshot_valid
-  CHECK (member_capacity_snapshot BETWEEN 2 AND 100);
+  CHECK (member_capacity_snapshot BETWEEN 2 AND 100),
+  ADD CONSTRAINT tenants_cycle_duration_snapshot_valid CHECK (cycle_duration_days_snapshot > 0),
+  ADD CONSTRAINT tenants_contribution_window_snapshot_valid CHECK (contribution_window_days_snapshot > 0 AND contribution_window_days_snapshot <= cycle_duration_days_snapshot);
 
 -- Capacity is now tenant-specific. Drop the original fixed 1..12 slot check.
 ALTER TABLE tenant_memberships
