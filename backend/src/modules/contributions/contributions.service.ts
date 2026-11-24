@@ -645,7 +645,7 @@ export class ContributionsService {
     }
 
     // ─────────────────────────────────────────────────────────────
-    // NEW: if this was the 12th confirmed contribution for this
+    // NEW: if this completed the configured contribution count for this
     // cycle, generate the payout + fee intents NOW, with the actual
     // money in the pool. This is the ONLY place payout intents are
     // created — never on cycle start.
