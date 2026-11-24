@@ -122,12 +122,12 @@ export class TenantsRepository {
     return { tenants: listResult.rows, total };
   }
 
-  async insert(branchId: string, configurationId: string, capacity: number, name: string | null): Promise<TenantRow> {
+  async insert(branchId: string, configurationId: string, capacity: number, cycleDurationDays: number, contributionWindowDays: number, name: string | null): Promise<TenantRow> {
     const result = await pool.query<TenantRow>(
-      `INSERT INTO tenants (branch_id, configuration_id, member_capacity_snapshot, name, status)
-       VALUES ($1, $2, $3, $4, 'FILLING')
+      `INSERT INTO tenants (branch_id, configuration_id, member_capacity_snapshot, cycle_duration_days_snapshot, contribution_window_days_snapshot, name, status)
+       VALUES ($1, $2, $3, $4, $5, $6, 'FILLING')
        RETURNING *`,
-      [branchId, configurationId, capacity, name],
+      [branchId, configurationId, capacity, cycleDurationDays, contributionWindowDays, name],
     );
     return result.rows[0]!;
   }
