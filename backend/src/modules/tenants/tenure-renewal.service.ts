@@ -446,9 +446,9 @@ export class TenureRenewalService {
              current_tenure_tvc_bps = $3,
              current_cycle = 1,
              cycle_started_at = NOW(),
-             cycle_ends_at = NOW() + INTERVAL '30 days',
-             cycle_contribution_deadline_at = NOW() + INTERVAL '21 days',
-             cycle_payout_at = NOW() + INTERVAL '30 days',
+             cycle_ends_at = NOW() + (cycle_duration_days_snapshot * INTERVAL '1 day'),
+             cycle_contribution_deadline_at = NOW() + (contribution_window_days_snapshot * INTERVAL '1 day'),
+             cycle_payout_at = NOW() + (cycle_duration_days_snapshot * INTERVAL '1 day'),
              cycle_advanced_at = NULL,
              tenure_started_at = NOW(),
              renewal_opened_at = NULL,
@@ -456,7 +456,7 @@ export class TenureRenewalService {
              renewal_fill_ends_at = NULL,
              completed_at = NULL
          WHERE id = $1`,
-        [tenantId, nextTenure, env.TVC_ANNUAL_BPS],
+        [tenantId, nextTenure, 0],
       );
 
       await record(
@@ -545,7 +545,7 @@ export class TenureRenewalService {
     target: { tenant: TenantRow; count: number },
     _allFilling: Array<{ tenant: TenantRow; count: number }>,
   ): Promise<void> {
-    const slotsNeeded = 12 - renewingCount;
+    const slotsNeeded = renewingTenant.member_capacity_snapshot - renewingCount;
     if (slotsNeeded <= 0) {
       await this.activateNextTenure(renewingTenant.id);
       return;
@@ -632,7 +632,7 @@ export class TenureRenewalService {
     renewingMembers: TenantMembershipRow[],
     target: { tenant: TenantRow; count: number },
   ): Promise<void> {
-    const slotsAvailableInTarget = 12 - target.count;
+    const slotsAvailableInTarget = target.tenant.member_capacity_snapshot - target.count;
     if (slotsAvailableInTarget <= 0) {
       logger.warn(
         { targetTenantId: target.tenant.id },
@@ -653,7 +653,7 @@ export class TenureRenewalService {
 
     const used = await tenantsRepository.usedSlots(target.tenant.id);
     const freeSlots: number[] = [];
-    for (let s = 1; s <= 12; s++) {
+    for (let s = 1; s <= target.tenant.member_capacity_snapshot; s++) {
       if (!used.includes(s)) freeSlots.push(s);
     }
 
@@ -707,7 +707,7 @@ export class TenureRenewalService {
         renewingTenant.id,
         'All members transferred during rebalance',
       );
-    } else if (remaining.length === 12) {
+    } else if (remaining.length === renewingTenant.member_capacity_snapshot) {
       await this.activateNextTenure(renewingTenant.id);
     } else {
       logger.warn(
