@@ -27,6 +27,8 @@ export interface RequestMeta {
 export interface TenantDto {
   id: string;
   branchId: string;
+  configurationId: string;
+  memberCapacity: number;
   name: string | null;
   status: TenantStatus;
   currentCycle: number;
@@ -71,6 +73,8 @@ async function toTenantDto(row: TenantRow): Promise<TenantDto> {
   return {
     id: row.id,
     branchId: row.branch_id,
+    configurationId: row.configuration_id,
+    memberCapacity: row.member_capacity_snapshot,
     name: row.name,
     status: row.status,
     currentCycle: row.current_cycle,
@@ -222,7 +226,9 @@ export class TenantsService {
     actorId: string,
     meta: RequestMeta,
   ): Promise<TenantDto> {
-    const tenant = await tenantsRepository.insert(branchId, null);
+    const legacy = await (await import('../../db')).pool.query<{id:string;member_capacity:number}>("SELECT id, member_capacity FROM circle_configurations WHERE branch_id = $1 AND is_legacy = TRUE LIMIT 1", [branchId]);
+    if (!legacy.rows[0]) throw new NotFoundError('Legacy circle configuration');
+    const tenant = await tenantsRepository.insert(branchId, legacy.rows[0].id, legacy.rows[0].member_capacity, null);
 
     await record({
       actorId,
@@ -255,7 +261,7 @@ export class TenantsService {
     if (used.includes(slotNumber)) {
       throw new ConflictError(`Slot ${slotNumber} is taken`, 'TENANT_SLOT_TAKEN');
     }
-    if (used.length >= 12) {
+    if (used.length >= tenant.member_capacity_snapshot) {
       throw new ConflictError('Tenant is full', 'TENANT_FULL');
     }
 
@@ -277,14 +283,14 @@ export class TenantsService {
 
   async pickRandomFreeSlot(tenantId: string): Promise<number> {
     const used = await tenantsRepository.usedSlots(tenantId);
-    if (used.length >= 12) {
+    if (used.length >= tenant.member_capacity_snapshot) {
       throw new AppError({
         code: 'TENANT_FULL',
         httpStatus: 409,
         message: 'Tenant is full',
       });
     }
-    const free = Array.from({ length: 12 }, (_, i) => i + 1).filter((n) => !used.includes(n));
+    const free = Array.from({ length: tenant.member_capacity_snapshot }, (_, i) => i + 1).filter((n) => !used.includes(n));
     return free[Math.floor(Math.random() * free.length)]!;
   }
 }
