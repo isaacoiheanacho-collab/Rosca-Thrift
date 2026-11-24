@@ -5,7 +5,7 @@
  * user creation. If consent recording fails, the whole registration rolls back.
  */
 
-import { withTransaction } from '../../db';
+import { withTransaction, pool } from '../../db';
 import { env } from '../../config/env';
 import { logger } from '../../logger';
 import { AppError, ConflictError, NotFoundError } from '../../errors';
@@ -103,8 +103,7 @@ export class AuthService {
 
     let selectedConfigurationId: string | null = null;
     if (branchId) {
-      const { pool } = await import('../../db');
-      const configurations = await pool.query<{ id: string }>(
+      const configurations = await pool.query<{ id: string; is_legacy: boolean }>(
         `SELECT id, is_legacy FROM circle_configurations WHERE branch_id = $1 ORDER BY created_at ASC`,
         [branchId],
       );
