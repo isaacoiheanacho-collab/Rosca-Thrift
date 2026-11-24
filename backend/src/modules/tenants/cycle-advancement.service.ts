@@ -128,9 +128,9 @@ export class CycleAdvancementService {
         `UPDATE tenants
          SET current_cycle = $2,
              cycle_started_at = NOW(),
-             cycle_ends_at = NOW() + INTERVAL '30 days',
-             cycle_contribution_deadline_at = NOW() + INTERVAL '21 days',
-             cycle_payout_at = NOW() + INTERVAL '30 days',
+             cycle_ends_at = NOW() + (cycle_duration_days_snapshot * INTERVAL '1 day'),
+             cycle_contribution_deadline_at = NOW() + (contribution_window_days_snapshot * INTERVAL '1 day'),
+             cycle_payout_at = NOW() + (cycle_duration_days_snapshot * INTERVAL '1 day'),
              cycle_advanced_at = NOW()
          WHERE id = $1`,
         [tenant.id, newCycle],
