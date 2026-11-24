@@ -75,7 +75,7 @@ export interface BranchSummaryDto {
 
 async function toTenantDto(row: TenantRow): Promise<TenantDto> {
   const memberCount = await tenantsRepository.countMembers(row.id);
-  const configResult = await (await import('../../db')).pool.query<{name:string;contribution_amount:string;contribution_frequency:string}>('SELECT name, contribution_amount::text, contribution_frequency FROM circle_configurations WHERE id = $1', [row.configuration_id]);
+  const configResult = await (await import('../../db.js')).pool.query<{name:string;contribution_amount:string;contribution_frequency:string}>('SELECT name, contribution_amount::text, contribution_frequency FROM circle_configurations WHERE id = $1', [row.configuration_id]);
   const config = configResult.rows[0];
   return {
     id: row.id,
@@ -238,7 +238,7 @@ export class TenantsService {
     actorId: string,
     meta: RequestMeta,
   ): Promise<TenantDto> {
-    const legacy = await (await import('../../db')).pool.query<{id:string;member_capacity:number;cycle_duration_days:number;contribution_window_days:number}>("SELECT id, member_capacity, cycle_duration_days, contribution_window_days FROM circle_configurations WHERE branch_id = $1 AND is_legacy = TRUE LIMIT 1", [branchId]);
+    const legacy = await (await import('../../db.js')).pool.query<{id:string;member_capacity:number;cycle_duration_days:number;contribution_window_days:number}>("SELECT id, member_capacity, cycle_duration_days, contribution_window_days FROM circle_configurations WHERE branch_id = $1 AND is_legacy = TRUE LIMIT 1", [branchId]);
     if (!legacy.rows[0]) throw new NotFoundError('Legacy circle configuration');
     const tenant = await tenantsRepository.insert(branchId, legacy.rows[0].id, legacy.rows[0].member_capacity, legacy.rows[0].cycle_duration_days, legacy.rows[0].contribution_window_days, null);
 
