@@ -21,8 +21,12 @@ export interface CreateCircleConfigurationInput {
   contributionAmountPence: string;
   contributionFrequency: ContributionFrequency;
   memberCapacity: number;
-  contributionWindowDays: number;
-  cycleDurationDays: number;
+}
+
+function scheduleForFrequency(frequency: ContributionFrequency) {
+  return frequency === 'WEEKLY'
+    ? { contributionWindowDays: 5, cycleDurationDays: 7 }
+    : { contributionWindowDays: 21, cycleDurationDays: 30 };
 }
 
 export class CircleConfigurationsService {
@@ -66,6 +70,7 @@ export class CircleConfigurationsService {
     if (input.memberCapacity < 2 || input.memberCapacity > 100) {
       throw new AppError({code:'CIRCLE_CAPACITY_INVALID',httpStatus:400,message:'Co-saver capacity must be between 2 and 100'});
     }
+    const schedule = scheduleForFrequency(input.contributionFrequency);
     const duplicate = await pool.query(
       `SELECT id FROM circle_configurations
        WHERE branch_id = $1
@@ -73,7 +78,7 @@ export class CircleConfigurationsService {
          AND member_capacity = $4 AND contribution_window_days = $5
          AND cycle_duration_days = $6`,
       [branchId, amount.toString(), input.contributionFrequency, input.memberCapacity,
-       input.contributionWindowDays, input.cycleDurationDays],
+       schedule.contributionWindowDays, schedule.cycleDurationDays],
     );
     if (duplicate.rowCount) {
       throw new ConflictError('A configuration with this name or these material settings already exists', 'CIRCLE_CONFIGURATION_DUPLICATE');
@@ -89,7 +94,7 @@ export class CircleConfigurationsService {
                    contribution_frequency, member_capacity, collection_positions,
                    contribution_window_days, cycle_duration_days, created_at`,
         [branchId, input.name.trim(), amount.toString(), input.contributionFrequency,
-         input.memberCapacity, input.contributionWindowDays, input.cycleDurationDays, actorId],
+         input.memberCapacity, schedule.contributionWindowDays, schedule.cycleDurationDays, actorId],
       );
       return this.toDto(result.rows[0]);
     } catch (error: any) {
@@ -110,9 +115,9 @@ export class CircleConfigurationsService {
       payoutFrequency: row.contribution_frequency,
       memberCapacity: row.member_capacity,
       collectionPositions: row.collection_positions,
-      contributionWindowDays: row.contribution_window_days,
-      cycleDurationDays: row.cycle_duration_days,
-      tenureDurationDays: row.cycle_duration_days * row.member_capacity,
+      contributionWindowDays: scheduleForFrequency(row.contribution_frequency).contributionWindowDays,
+      cycleDurationDays: scheduleForFrequency(row.contribution_frequency).cycleDurationDays,
+      tenureDurationDays: scheduleForFrequency(row.contribution_frequency).cycleDurationDays * row.member_capacity,
       tenantCount: row.tenant_count === undefined ? undefined : Number(row.tenant_count),
       fillingCount: row.filling_count === undefined ? undefined : Number(row.filling_count),
       createdAt: row.created_at.toISOString(),
