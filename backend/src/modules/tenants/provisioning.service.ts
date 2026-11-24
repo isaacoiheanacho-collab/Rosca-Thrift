@@ -125,7 +125,7 @@ export class ProvisioningService {
       const tenantCount = Number(countRes.rows[0]?.count ?? '0');
       
       // Pad with zero: Tenant 01, Tenant 02
-      const tenantName = `${config.name} ${String(tenantCount + 1).padStart(2, '0')}`;
+      const tenantName = `${config.name} ${tenantCount + 1}`;
 
       try {
         tenant = await tenantsRepository.insert(branchId, configurationId, config.member_capacity, config.cycle_duration_days, config.contribution_window_days, tenantName);
