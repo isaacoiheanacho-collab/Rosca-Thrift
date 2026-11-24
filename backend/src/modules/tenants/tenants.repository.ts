@@ -12,6 +12,8 @@ export type RenewalState = 'NONE' | 'VOTING' | 'REPLACING' | 'READY' | 'RENEWED'
 export interface TenantRow {
   id: string;
   branch_id: string;
+  configuration_id: string;
+  member_capacity_snapshot: number;
   name: string | null;
   status: TenantStatus;
   current_cycle: number;
@@ -57,13 +59,13 @@ export class TenantsRepository {
     return result.rows[0] ?? null;
   }
 
-  async findOpenByBranch(branchId: string): Promise<TenantRow | null> {
+  async findOpenByConfiguration(branchId: string, configurationId: string): Promise<TenantRow | null> {
     const result = await pool.query<TenantRow>(
       `SELECT * FROM tenants
-       WHERE branch_id = $1 AND status = 'FILLING'
+       WHERE branch_id = $1 AND configuration_id = $2 AND status = 'FILLING'
        ORDER BY created_at ASC
        LIMIT 1`,
-      [branchId],
+      [branchId, configurationId],
     );
     return result.rows[0] ?? null;
   }
@@ -73,13 +75,13 @@ export class TenantsRepository {
    * (renewal_state = REPLACING). Used by the provisioning service to
    * prioritize replacing tenants over fresh FILLING tenants.
    */
-  async findReplacingByBranch(branchId: string): Promise<TenantRow | null> {
+  async findReplacingByConfiguration(branchId: string, configurationId: string): Promise<TenantRow | null> {
     const result = await pool.query<TenantRow>(
       `SELECT * FROM tenants
-       WHERE branch_id = $1 AND renewal_state = 'REPLACING'
+       WHERE branch_id = $1 AND configuration_id = $2 AND renewal_state = 'REPLACING'
        ORDER BY renewal_opened_at ASC NULLS LAST
        LIMIT 1`,
-      [branchId],
+      [branchId, configurationId],
     );
     return result.rows[0] ?? null;
   }
@@ -119,12 +121,12 @@ export class TenantsRepository {
     return { tenants: listResult.rows, total };
   }
 
-  async insert(branchId: string, name: string | null): Promise<TenantRow> {
+  async insert(branchId: string, configurationId: string, capacity: number, name: string | null): Promise<TenantRow> {
     const result = await pool.query<TenantRow>(
-      `INSERT INTO tenants (branch_id, name, status)
-       VALUES ($1, $2, 'FILLING')
+      `INSERT INTO tenants (branch_id, configuration_id, member_capacity_snapshot, name, status)
+       VALUES ($1, $2, $3, $4, 'FILLING')
        RETURNING *`,
-      [branchId, name],
+      [branchId, configurationId, capacity, name],
     );
     return result.rows[0]!;
   }
