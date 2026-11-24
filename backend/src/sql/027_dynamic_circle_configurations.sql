@@ -115,3 +115,13 @@ CREATE UNIQUE INDEX IF NOT EXISTS uq_circle_config_material_settings
 -- Each configuration has its own sequential tenant names.
 CREATE UNIQUE INDEX IF NOT EXISTS uq_tenant_configuration_name
   ON tenants (configuration_id, name);
+
+
+-- Preserve the selected configuration on a saver before lazy provisioning.
+ALTER TABLE users
+  ADD COLUMN IF NOT EXISTS circle_configuration_id UUID
+    REFERENCES circle_configurations(id) ON DELETE RESTRICT;
+
+CREATE INDEX IF NOT EXISTS idx_users_circle_configuration
+  ON users (circle_configuration_id)
+  WHERE circle_configuration_id IS NOT NULL;
