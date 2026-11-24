@@ -1,7 +1,7 @@
 /**
  * Provisioning service.
  *
- * Called when a saver becomes "fully verified" (phone verified + KYC approved).
+ * Called by the existing saver provisioning workflow.
  *
  * Flow (in priority order):
  *   1. If user already has an active membership -> do nothing.
@@ -9,12 +9,12 @@
  *      -> assign them to that tenant's unfilled slot (renewal replacement).
  *   3. Else find the oldest FILLING tenant in their branch.
  *      - If none exists -> create a new tenant for the branch.
- *   4. Pick a random free slot (1-12).
+ *   4. Pick a random free slot within the selected configuration capacity.
  *   5. Insert membership.
- *   6. If tenant now has 12 members -> mark tenant ACTIVE, set activated_at,
- *      set cycle columns, snapshot tenure rates.
+ *   6. If tenant reaches its configured capacity -> mark tenant ACTIVE, set activated_at,
+ *      set cycle columns, snapshot the tenure fee and TVC settings.
  *      (Payout + fee intents are NOT generated here — they are generated
- *       once the cycle's 12 contributions are confirmed, in
+ *       once all configured contributions for the cycle are confirmed, in
  *       contributionsService.confirmContribution.)
  *   7. Audit every step.
  *
@@ -117,14 +117,14 @@ export class ProvisioningService {
     let createdNewTenant = false;
 
     if (!tenant) {
-      // Count existing tenants to generate a sequential name (e.g., Tenant 01)
+      // Count tenants in this configuration to generate its own sequential name (e.g., Orange 1)
       const countRes = await pool.query<{ count: string }>(
         `SELECT COUNT(*)::text AS count FROM tenants WHERE branch_id = $1 AND configuration_id = $2`,
         [branchId, configurationId]
       );
       const tenantCount = Number(countRes.rows[0]?.count ?? '0');
       
-      // Pad with zero: Tenant 01, Tenant 02
+      // Tenant sequence is independent for each configuration.
       const tenantName = `${config.name} ${tenantCount + 1}`;
 
       try {
