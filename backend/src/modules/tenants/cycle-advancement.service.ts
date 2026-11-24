@@ -41,7 +41,7 @@ export interface AdvancementResult {
   newFeeIntentId?: string;
 }
 
-const CYCLES_PER_TENURE = 12;
+
 
 interface TxResult {
   advanced: boolean;
@@ -97,7 +97,7 @@ export class CycleAdvancementService {
       // double-advance.
 
       const previousCycle = tenant.current_cycle;
-      const isFinalCycle = previousCycle >= CYCLES_PER_TENURE;
+      const isFinalCycle = previousCycle >= tenant.member_capacity_snapshot;
 
       if (isFinalCycle) {
         // Final cycle of the tenure: mark COMPLETED + open renewal.
