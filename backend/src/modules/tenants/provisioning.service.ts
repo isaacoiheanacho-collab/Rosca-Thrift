@@ -127,8 +127,16 @@ export class ProvisioningService {
       // Pad with zero: Tenant 01, Tenant 02
       const tenantName = `${config.name} ${String(tenantCount + 1).padStart(2, '0')}`;
 
-      tenant = await tenantsRepository.insert(branchId, configurationId, config.member_capacity, tenantName);
-      createdNewTenant = true;
+      try {
+        tenant = await tenantsRepository.insert(branchId, configurationId, config.member_capacity, tenantName);
+        createdNewTenant = true;
+      } catch (error: any) {
+        // Another concurrent provisioner may have created this stream's
+        // filling tenant. Reuse it instead of creating a duplicate.
+        if (error?.code !== '23505') throw error;
+        tenant = await tenantsRepository.findOpenByConfiguration(branchId, configurationId);
+        if (!tenant) throw error;
+      }
 
       await record({
         actorId: null,
