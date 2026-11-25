@@ -210,11 +210,11 @@ export class KycRepository {
       }
       if (options.tenantId) {
         params.push(options.tenantId);
-        conditions.push(`tm.tenant_id = ${params.length}`);
+        conditions.push(`tm.tenant_id = $${params.length}`);
       }
       if (options.configurationId) {
         params.push(options.configurationId);
-        conditions.push(`u.circle_configuration_id = ${params.length}`);
+        conditions.push(`u.circle_configuration_id = $${params.length}`);
       }
 
       const where = `WHERE ${conditions.join(' AND ')}`;
@@ -280,11 +280,11 @@ export class KycRepository {
     }
     if (options.tenantId) {
       params.push(options.tenantId);
-      conditions.push(`tm.tenant_id = ${params.length}`);
+      conditions.push(`tm.tenant_id = $${params.length}`);
     }
     if (options.configurationId) {
       params.push(options.configurationId);
-      conditions.push(`u.circle_configuration_id = ${params.length}`);
+      conditions.push(`u.circle_configuration_id = $${params.length}`);
     }
 
     const where = `WHERE ${conditions.join(' AND ')}`;
