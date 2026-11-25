@@ -242,7 +242,7 @@ export class KycRepository {
         WHERE tm_filter.user_id = u.id
           AND tm_filter.tenant_id = $${params.length}
           AND tm_filter.status <> 'REMOVED'
-          AND t_filter.configuration_id = u.circle_configuration_id
+          AND (u.circle_configuration_id IS NULL OR t_filter.configuration_id = u.circle_configuration_id)
       )`);
     }
 
