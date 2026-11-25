@@ -6,6 +6,7 @@
  * Phase 1.8:  tenure renewal - lazy check on dashboard load.
  */
 
+import { pool } from '../../db';
 import { logger } from '../../logger';
 import { AppError, ConflictError, NotFoundError } from '../../errors';
 import { record } from '../audit/audit.service';
@@ -164,8 +165,25 @@ export class TenantsService {
         user.status === 'VERIFIED'
       ) {
         try {
-          await provisioningService.provisionUserToTenant(user.id, user.branch_id);
-          membership = await tenantsRepository.findMembershipByUser(userId);
+          // Do not create a new membership when contribution intents or
+          // confirmed contributions already exist. Those records must remain
+          // attached to their original tenant until explicitly reconciled.
+          const history = await pool.query<{ has_history: boolean }>(
+            `SELECT
+               EXISTS (SELECT 1 FROM contribution_intents WHERE user_id = $1)
+               OR EXISTS (SELECT 1 FROM contributions WHERE user_id = $1)
+               AS has_history`,
+            [user.id],
+          );
+          if (history.rows[0]?.has_history) {
+            logger.warn(
+              { userId, branchId: user.branch_id },
+              'Existing contribution history found without active membership; automatic reassignment skipped',
+            );
+          } else {
+            await provisioningService.provisionUserToTenant(user.id, user.branch_id);
+            membership = await tenantsRepository.findMembershipByUser(userId);
+          }
         } catch (err) {
           logger.error(
             { err, userId, branchId: user.branch_id },
