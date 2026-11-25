@@ -130,6 +130,7 @@ branchAdminKycRouter.get(
         offset: number;
         status?: any;
         tenantId?: string;
+        configurationId?: string;
       };
       const user = req.user!;
 
@@ -143,6 +144,7 @@ branchAdminKycRouter.get(
         status: q.status,
         branchId: branchFilter,
         tenantId: q.tenantId,
+        configurationId: q.configurationId,
       });
       res.json({ ok: true, data: { ...result, limit: q.limit, offset: q.offset } });
     } catch (err) {
