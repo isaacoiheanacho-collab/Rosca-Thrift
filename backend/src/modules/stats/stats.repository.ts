@@ -462,8 +462,9 @@ export class StatsRepository {
          FROM kyc_submissions k
          JOIN users u ON u.id = k.user_id
          WHERE k.branch_id = $1 AND u.role = 'SAVER'
+           AND ($2::uuid IS NULL OR u.circle_configuration_id = $2)
          GROUP BY k.status`,
-        [branchId],
+        [branchId, configurationId ?? null],
       ),
       pool.query<{ renewal_state: string; count: string }>(
         `SELECT renewal_state, COUNT(*)::text AS count FROM tenants
@@ -512,6 +513,7 @@ export class StatsRepository {
         pool.query<{ count: string }>(
           `SELECT COUNT(*)::text AS count FROM contribution_intents i
            WHERE i.branch_id = $1
+             AND ($2::uuid IS NULL OR EXISTS (SELECT 1 FROM tenants t WHERE t.id = i.tenant_id AND t.configuration_id = $2))
              AND i.state IN ('PENDING', 'LATE')
              AND EXISTS (SELECT 1 FROM receipts r WHERE r.intent_id = i.id)
              AND NOT EXISTS (SELECT 1 FROM contributions c WHERE c.intent_id = i.id)`,
@@ -560,10 +562,10 @@ export class StatsRepository {
          COUNT(c.id)::text AS count
        FROM contributions c
        JOIN tenants t ON t.id = c.tenant_id
-       WHERE c.branch_id = $1
+       WHERE c.branch_id = $1 AND ($2::uuid IS NULL OR t.configuration_id = $2)
        GROUP BY c.tenant_id, t.name
        ORDER BY total DESC`,
-      [branchId]
+      [branchId, configurationId ?? null]
     );
     return result.rows.map(r => ({
       tenantId: r.tenant_id,
