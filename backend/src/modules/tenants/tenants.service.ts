@@ -12,6 +12,7 @@ import { record } from '../audit/audit.service';
 import { usersRepository } from '../users/users.repository';
 import { cycleAdvancementService } from './cycle-advancement.service';
 import { tenureRenewalService } from './tenure-renewal.service';
+import { provisioningService } from './provisioning.service';
 import {
   tenantsRepository,
   type TenantMembershipRow,
@@ -148,7 +149,32 @@ export class TenantsService {
       logger.error({ err, userId }, 'Lazy renewal check failed');
     }
 
-    const membership = await tenantsRepository.findMembershipByUser(userId);
+    let membership = await tenantsRepository.findMembershipByUser(userId);
+
+    // Recover a failed post-KYC provisioning attempt on the next saver dashboard
+    // request. This is idempotent and only runs for phone-verified, KYC-approved
+    // savers with a branch; OTP and KYC verification flows are not modified.
+    if (!membership) {
+      const user = await usersRepository.findById(userId);
+      if (
+        user?.role === 'SAVER' &&
+        user.branch_id &&
+        user.phone_verified_at &&
+        user.kyc_verified_at &&
+        user.status === 'VERIFIED'
+      ) {
+        try {
+          await provisioningService.provisionUserToTenant(user.id, user.branch_id);
+          membership = await tenantsRepository.findMembershipByUser(userId);
+        } catch (err) {
+          logger.error(
+            { err, userId, branchId: user.branch_id },
+            'Dashboard provisioning recovery failed',
+          );
+        }
+      }
+    }
+
     if (!membership) return null;
 
     const tenant = await tenantsRepository.findById(membership.tenant_id);
