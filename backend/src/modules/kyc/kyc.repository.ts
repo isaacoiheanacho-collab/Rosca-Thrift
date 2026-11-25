@@ -217,7 +217,20 @@ export class KycRepository {
 
     if (options.configurationId) {
       params.push(options.configurationId);
-      conditions.push(`u.circle_configuration_id = $${params.length}`);
+      conditions.push(`(
+        u.circle_configuration_id = ${params.length}
+        OR (
+          u.circle_configuration_id IS NULL
+          AND EXISTS (
+            SELECT 1
+            FROM tenant_memberships tm_legacy
+            JOIN tenants t_legacy ON t_legacy.id = tm_legacy.tenant_id
+            WHERE tm_legacy.user_id = u.id
+              AND tm_legacy.status <> 'REMOVED'
+              AND t_legacy.configuration_id = ${params.length}
+          )
+        )
+      )`);
     }
 
     if (options.tenantId) {
