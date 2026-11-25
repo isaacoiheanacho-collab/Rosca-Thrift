@@ -181,14 +181,14 @@ export class StatsService {
     }));
   }
 
-  async getBranchAdminStats(branchId: string): Promise<BranchAdminStatsDto> {
+  async getBranchAdminStats(branchId: string, configurationId?: string): Promise<BranchAdminStatsDto> {
     const branch = await branchesRepository.findById(branchId);
     if (!branch) throw new NotFoundError('Branch');
 
     const [counts, money, contribByTenant] = await Promise.all([
-      statsRepository.branchCounts(branchId),
-      statsRepository.branchMoneyThisMonth(branchId),
-      statsRepository.branchContributionsByTenant(branchId),
+      statsRepository.branchCounts(branchId, configurationId),
+      statsRepository.branchMoneyThisMonth(branchId, configurationId),
+      statsRepository.branchContributionsByTenant(branchId, configurationId),
     ]);
 
     const shared = assembleSharedBlocks(counts, money);
