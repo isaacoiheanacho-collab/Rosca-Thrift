@@ -579,11 +579,15 @@ export class ContributionsService {
     // The contribution amount is fixed when the intent is created from the
     // tenant's group configuration. Never allow a stale UI default or manual
     // entry to credit a different amount to the tenant ledger.
-    if (amount !== intent.expected_amount) {
+    // PostgreSQL's pg driver returns BIGINT/NUMERIC values as strings by default.
+    // Compare normalized bigint values; strict comparison against the raw DB
+    // string would reject equal amounts (e.g. 5000n !== "5000").
+    const expectedAmount = BigInt(intent.expected_amount);
+    if (amount !== expectedAmount) {
       throw new ValidationError(
-        `The configured contribution for this intent is £${(Number(intent.expected_amount) / 100).toFixed(2)}. Refresh the pending receipt and confirm the exact amount in pence.`,
+        `The configured contribution for this intent is £${(Number(expectedAmount) / 100).toFixed(2)}. Refresh the pending receipt and confirm the exact amount in pence.`,
         {
-          expectedAmountPence: intent.expected_amount.toString(),
+          expectedAmountPence: expectedAmount.toString(),
           submittedAmountPence: amount.toString(),
         },
       );
