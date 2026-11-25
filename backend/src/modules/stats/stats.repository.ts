@@ -444,31 +444,34 @@ export class StatsRepository {
   // Branch-scoped
   // ─────────────────────────────────────────────────────────────
 
-  async branchCounts(branchId: string): Promise<BranchCounts> {
+  async branchCounts(branchId: string, configurationId?: string): Promise<BranchCounts> {
     const [tenantStatus, userCounts, kycCounts, renewalCounts] = await Promise.all([
       pool.query<{ status: string; count: string }>(
         `SELECT status, COUNT(*)::text AS count FROM tenants
-         WHERE branch_id = $1 GROUP BY status`,
-        [branchId],
+         WHERE branch_id = $1 AND ($2::uuid IS NULL OR configuration_id = $2) GROUP BY status`,
+        [branchId, configurationId ?? null],
       ),
       pool.query<{ count: string }>(
         `SELECT COUNT(*)::text AS count FROM users
-         WHERE role = 'SAVER' AND branch_id = $1`,
-        [branchId],
+         WHERE role = 'SAVER' AND branch_id = $1
+           AND ($2::uuid IS NULL OR circle_configuration_id = $2)`,
+        [branchId, configurationId ?? null],
       ),
       pool.query<{ status: string; count: string }>(
         `SELECT k.status, COUNT(*)::text AS count 
          FROM kyc_submissions k
          JOIN users u ON u.id = k.user_id
          WHERE k.branch_id = $1 AND u.role = 'SAVER'
+           AND ($2::uuid IS NULL OR u.circle_configuration_id = $2)
          GROUP BY k.status`,
-        [branchId],
+        [branchId, configurationId ?? null],
       ),
       pool.query<{ renewal_state: string; count: string }>(
         `SELECT renewal_state, COUNT(*)::text AS count FROM tenants
          WHERE branch_id = $1 AND renewal_state != 'NONE'
+           AND ($2::uuid IS NULL OR configuration_id = $2)
          GROUP BY renewal_state`,
-        [branchId],
+        [branchId, configurationId ?? null],
       ),
     ]);
 
@@ -496,40 +499,45 @@ export class StatsRepository {
     };
   }
 
-  async branchMoneyThisMonth(branchId: string): Promise<BranchMoneyThisMonth> {
+  async branchMoneyThisMonth(branchId: string, configurationId?: string): Promise<BranchMoneyThisMonth> {
     const [contribRes, contribPendingRes, payoutRes, feePendingRes, payoutPendingRes] =
       await Promise.all([
         pool.query<{ sum: string; count: string }>(
           `SELECT COALESCE(SUM(amount), 0)::text AS sum, COUNT(*)::text AS count
            FROM contributions
            WHERE branch_id = $1
-             AND confirmed_at >= date_trunc('month', NOW())`,
-          [branchId],
+             AND confirmed_at >= date_trunc('month', NOW())
+             AND ($2::uuid IS NULL OR EXISTS (SELECT 1 FROM tenants t WHERE t.id = contributions.tenant_id AND t.configuration_id = $2))`,
+          [branchId, configurationId ?? null],
         ),
         pool.query<{ count: string }>(
           `SELECT COUNT(*)::text AS count FROM contribution_intents i
            WHERE i.branch_id = $1
+             AND ($2::uuid IS NULL OR EXISTS (SELECT 1 FROM tenants t WHERE t.id = i.tenant_id AND t.configuration_id = $2))
              AND i.state IN ('PENDING', 'LATE')
              AND EXISTS (SELECT 1 FROM receipts r WHERE r.intent_id = i.id)
              AND NOT EXISTS (SELECT 1 FROM contributions c WHERE c.intent_id = i.id)`,
-          [branchId],
+          [branchId, configurationId ?? null],
         ),
         pool.query<{ sum: string; count: string }>(
           `SELECT COALESCE(SUM(net_amount), 0)::text AS sum, COUNT(*)::text AS count
            FROM payout_intents
            WHERE branch_id = $1
-             AND payout_confirmed_at >= date_trunc('month', NOW())`,
-          [branchId],
+             AND payout_confirmed_at >= date_trunc('month', NOW())
+             AND ($2::uuid IS NULL OR EXISTS (SELECT 1 FROM tenants t WHERE t.id = payout_intents.tenant_id AND t.configuration_id = $2))`,
+          [branchId, configurationId ?? null],
         ),
         pool.query<{ count: string }>(
           `SELECT COUNT(*)::text AS count FROM platform_fee_intents
-           WHERE branch_id = $1 AND state = 'RECEIPT_UPLOADED'`,
-          [branchId],
+           WHERE branch_id = $1 AND state = 'RECEIPT_UPLOADED'
+              AND ($2::uuid IS NULL OR EXISTS (SELECT 1 FROM tenants t WHERE t.id = platform_fee_intents.tenant_id AND t.configuration_id = $2))`,
+          [branchId, configurationId ?? null],
         ),
         pool.query<{ count: string }>(
           `SELECT COUNT(*)::text AS count FROM payout_intents
-           WHERE branch_id = $1 AND state IN ('PENDING', 'FEE_PAID', 'RECEIPT_UPLOADED')`,
-          [branchId],
+           WHERE branch_id = $1 AND state IN ('PENDING', 'FEE_PAID', 'RECEIPT_UPLOADED')
+              AND ($2::uuid IS NULL OR EXISTS (SELECT 1 FROM tenants t WHERE t.id = payout_intents.tenant_id AND t.configuration_id = $2))`,
+          [branchId, configurationId ?? null],
         ),
       ]);
 
@@ -545,7 +553,7 @@ export class StatsRepository {
     };
   }
 
-  async branchContributionsByTenant(branchId: string): Promise<Array<{ tenantId: string; tenantName: string; totalPence: bigint; count: number }>> {
+  async branchContributionsByTenant(branchId: string, configurationId?: string): Promise<Array<{ tenantId: string; tenantName: string; totalPence: bigint; count: number }>> {
     const result = await pool.query<{ tenant_id: string; tenant_name: string; total: string; count: string }>(
       `SELECT 
          c.tenant_id,
@@ -554,10 +562,10 @@ export class StatsRepository {
          COUNT(c.id)::text AS count
        FROM contributions c
        JOIN tenants t ON t.id = c.tenant_id
-       WHERE c.branch_id = $1
+       WHERE c.branch_id = $1 AND ($2::uuid IS NULL OR t.configuration_id = $2)
        GROUP BY c.tenant_id, t.name
        ORDER BY total DESC`,
-      [branchId]
+      [branchId, configurationId ?? null]
     );
     return result.rows.map(r => ({
       tenantId: r.tenant_id,

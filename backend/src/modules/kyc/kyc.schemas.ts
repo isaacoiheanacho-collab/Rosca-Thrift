@@ -54,6 +54,7 @@ export const ListKycQuerySchema = z.object({
   offset: z.coerce.number().int().min(0).default(0),
   status: z.enum(['PENDING', 'APPROVED', 'REJECTED', 'NOT_SUBMITTED']).optional(),
   tenantId: z.string().uuid().optional(),
+  configurationId: z.string().uuid().optional(),
 });
 
 export type SubmitKycInput = z.infer<typeof SubmitKycSchema>;

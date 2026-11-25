@@ -196,6 +196,7 @@ export class KycRepository {
     status?: KycStatus;
     branchId?: string;
     tenantId?: string;
+    configurationId?: string;
   }): Promise<{ submissions: KycSubmissionRow[]; total: number }> {
     
     // 1. Handle users who haven't submitted KYC at all
@@ -210,6 +211,10 @@ export class KycRepository {
       if (options.tenantId) {
         params.push(options.tenantId);
         conditions.push(`tm.tenant_id = $${params.length}`);
+      }
+      if (options.configurationId) {
+        params.push(options.configurationId);
+        conditions.push(`u.circle_configuration_id = $${params.length}`);
       }
 
       const where = `WHERE ${conditions.join(' AND ')}`;
@@ -248,9 +253,10 @@ export class KycRepository {
            u.created_at,
            u.created_at AS updated_at,
            t.id AS tenant_id,
-           COALESCE(b.name, 'Branch') || ' / ' || COALESCE(t.name, 'Unnamed Tenant') AS tenant_name
+           COALESCE(b.name, 'Branch') || ' / ' || COALESCE(t.name, cc.name || ' (not yet allocated)', 'Unassigned') AS tenant_name
          ${baseFrom}
          LEFT JOIN branches b ON b.id = u.branch_id
+         LEFT JOIN circle_configurations cc ON cc.id = u.circle_configuration_id
          ${where}
          ORDER BY u.created_at DESC
          LIMIT $${limitIdx} OFFSET $${offsetIdx}`,
@@ -276,6 +282,10 @@ export class KycRepository {
       params.push(options.tenantId);
       conditions.push(`tm.tenant_id = $${params.length}`);
     }
+    if (options.configurationId) {
+      params.push(options.configurationId);
+      conditions.push(`u.circle_configuration_id = $${params.length}`);
+    }
 
     const where = `WHERE ${conditions.join(' AND ')}`;
 
@@ -298,12 +308,13 @@ export class KycRepository {
       `SELECT 
          k.*,
          t.id AS tenant_id,
-         COALESCE(b.name, 'Branch') || ' / ' || COALESCE(t.name, 'Unnamed Tenant') AS tenant_name
+         COALESCE(b.name, 'Branch') || ' / ' || COALESCE(t.name, cc.name || ' (not yet allocated)', 'Unassigned') AS tenant_name
        FROM kyc_submissions k
        JOIN users u ON u.id = k.user_id
        LEFT JOIN tenant_memberships tm ON tm.user_id = k.user_id AND tm.status != 'REMOVED'
        LEFT JOIN tenants t ON t.id = tm.tenant_id
        LEFT JOIN branches b ON b.id = k.branch_id
+       LEFT JOIN circle_configurations cc ON cc.id = u.circle_configuration_id
        ${where}
        ORDER BY k.created_at DESC
        LIMIT $${limitIdx} OFFSET $${offsetIdx}`,
