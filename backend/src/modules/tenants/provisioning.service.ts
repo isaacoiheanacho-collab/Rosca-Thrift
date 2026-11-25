@@ -87,19 +87,19 @@ export class ProvisioningService {
       slot_number: number;
       configuration_id: string;
     }>(
-      \`SELECT tm.tenant_id, tm.slot_number, t.configuration_id
+      `SELECT tm.tenant_id, tm.slot_number, t.configuration_id
        FROM tenant_memberships tm
        JOIN tenants t ON t.id = tm.tenant_id
        WHERE tm.user_id = $1 AND tm.status <> 'REMOVED'
        ORDER BY tm.joined_at DESC
-       LIMIT 1\`,
+       LIMIT 1`,
       [userId],
     );
     const existing = existingResult.rows[0];
     if (existing) {
       if (existing.configuration_id !== configurationId) {
         throw new Error(
-          \`Saver \${userId} has an active membership in configuration \${existing.configuration_id}, but selected configuration is \${configurationId}. Manual reconciliation is required.\`,
+          `Saver ${userId} has an active membership in configuration ${existing.configuration_id}, but selected configuration is ${configurationId}. Manual reconciliation is required.`,
         );
       }
       logger.debug({ userId, tenantId: existing.tenant_id, configurationId }, 'Already provisioned in selected group');
