@@ -5,11 +5,11 @@
  *   1.  Login as super admin
  *   2.  Create a fresh test branch
  *   3.  Branch admin (created by super admin) sets the branch pool account
- *   4.  Register + verify + KYC-approve 12 savers → tenant auto-creates + activates
- *   5.  One saver requests a contribution intent → receives reference + pool account
- *   6.  Saver uploads a receipt (image)
- *   7.  Branch admin confirms the contribution
- *   8.  Check the tenant ledger balance (should be £1,000 in pence = 100000)
+ *   4.  Register + verify + KYC-approve 12 savers in the legacy configuration
+ *   5.  One saver requests an intent and reads its configured amount
+ *   6.  Saver uploads a receipt for that exact amount
+ *   7.  Verify a mismatched confirmation amount is rejected without mutation
+ *   8.  Confirm using the intent amount and verify the saved contribution amount
  *
  * Run: yarn test:contribution
  */
@@ -228,7 +228,12 @@ async function main(): Promise<number> {
     return 1;
   }
   const intent = intentRes.json.data;
-  pass('saver got intent reference', intent.reference);
+  const expectedAmountPence = Number(intent.expectedAmountPence);
+  if (!Number.isSafeInteger(expectedAmountPence) || expectedAmountPence <= 0) {
+    fail('intent exposes a valid configured amount', String(intent.expectedAmountPence));
+    return 1;
+  }
+  pass('saver got intent reference and configured amount', `${intent.reference} — ${expectedAmountPence} pence`);
 
   // 7. Saver 1 uploads receipt
   const receiptRes = await uploadReceipt(
@@ -236,7 +241,7 @@ async function main(): Promise<number> {
     saver1Token,
     {
       intentId: intent.id,
-      claimedAmount: '100000', // £1000 in pence
+      claimedAmount: String(expectedAmountPence),
       claimedReference: intent.reference,
       claimedSenderName: 'Contrib Saver 1',
     },
@@ -255,15 +260,30 @@ async function main(): Promise<number> {
   //    Alternative: use the super admin to confirm — but the route is /api/branch-admin/*
   //    which requires role BRANCH_ADMIN or SUPER_ADMIN (per requireBranchAdmin).
   //    Yes! requireBranchAdmin allows SUPER_ADMIN. So super admin can confirm.
+  const mismatchAmountPence = expectedAmountPence + 1;
+  const mismatchRes = await api('POST', `/api/branch-admin/contributions/${intent.id}/confirm`, {
+    token: superToken,
+    body: { intentId: intent.id, amount: mismatchAmountPence },
+  });
+  if (mismatchRes.status !== 400 || mismatchRes.json.ok) {
+    fail('reject mismatched confirmation amount', JSON.stringify(mismatchRes.json));
+    return 1;
+  }
+  pass('mismatched confirmation amount rejected');
+
   const confirmRes = await api('POST', `/api/branch-admin/contributions/${intent.id}/confirm`, {
     token: superToken,
-    body: { intentId: intent.id, amount: 100000 },
+    body: { intentId: intent.id, amount: expectedAmountPence },
   });
   if (confirmRes.status !== 200 || !confirmRes.json.ok) {
     fail('confirm contribution', JSON.stringify(confirmRes.json));
     return 1;
   }
-  pass('contribution confirmed', confirmRes.json.data.reference);
+  if (Number(confirmRes.json.data.amountPence) !== expectedAmountPence) {
+    fail('confirmed contribution retains configured amount', JSON.stringify(confirmRes.json.data));
+    return 1;
+  }
+  pass('contribution confirmed at configured amount', `${confirmRes.json.data.reference} — ${expectedAmountPence} pence`);
 
   // 9. Verify ledger — hit the super-admin branch pool route? No.
   //    We don't have a ledger-read endpoint yet. But the test can verify
