@@ -21,6 +21,8 @@ export interface ContributionIntentRow {
   state: 'PENDING' | 'CONFIRMED' | 'LATE' | 'EXEMPT';
   created_at: Date;
   updated_at: Date;
+  tenant_name?: string | null;
+  user_name?: string | null;
 }
 
 export interface ContributionRow {
@@ -295,10 +297,13 @@ export class ContributionsRepository {
     const offsetIdx = params.length;
 
     const listResult = await pool.query<ContributionIntentRow>(
-      `SELECT i.* FROM contribution_intents i
+      `SELECT i.*, t.name AS tenant_name, u.full_name AS user_name
+       FROM contribution_intents i
+       JOIN tenants t ON t.id = i.tenant_id
+       JOIN users u ON u.id = i.user_id
        ${where}
        ORDER BY i.deadline_at ASC, i.slot_number ASC
-       LIMIT $${limitIdx} OFFSET $${offsetIdx}`,
+       LIMIT ${limitIdx} OFFSET ${offsetIdx}`,
       params,
     );
 
