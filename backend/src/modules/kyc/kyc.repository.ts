@@ -200,29 +200,29 @@ export class KycRepository {
   }): Promise<{ submissions: KycSubmissionRow[]; total: number }> {
     // A saver belongs to a group through users.circle_configuration_id.
     // Tenant allocation is not required for group KYC visibility.
-    const conditions: string[] = [\`u.role = 'SAVER'\`];
+    const conditions: string[] = [`u.role = 'SAVER'`];
     const params: unknown[] = [];
 
     if (options.status === 'NOT_SUBMITTED') {
       conditions.push('k.id IS NULL');
     } else if (options.status) {
       params.push(options.status);
-      conditions.push(\`k.status = $${params.length}\`);
+      conditions.push(`k.status = $${params.length}`);
     }
 
     if (options.branchId) {
       params.push(options.branchId);
-      conditions.push(\`u.branch_id = $${params.length}\`);
+      conditions.push(`u.branch_id = $${params.length}`);
     }
 
     if (options.configurationId) {
       params.push(options.configurationId);
-      conditions.push(\`u.circle_configuration_id = $${params.length}\`);
+      conditions.push(`u.circle_configuration_id = $${params.length}`);
     }
 
     if (options.tenantId) {
       params.push(options.tenantId);
-      conditions.push(\`EXISTS (
+      conditions.push(`EXISTS (
         SELECT 1
         FROM tenant_memberships tm_filter
         JOIN tenants t_filter ON t_filter.id = tm_filter.tenant_id
@@ -230,17 +230,17 @@ export class KycRepository {
           AND tm_filter.tenant_id = $${params.length}
           AND tm_filter.status <> 'REMOVED'
           AND t_filter.configuration_id = u.circle_configuration_id
-      )\`);
+      )`);
     }
 
-    const where = \`WHERE ${conditions.join(" AND ")}\`;
+    const where = `WHERE ${conditions.join(" AND ")}`;
     const notSubmitted = options.status === 'NOT_SUBMITTED';
     const baseFrom = notSubmitted
       ? 'FROM users u LEFT JOIN kyc_submissions k ON k.user_id = u.id'
       : 'FROM kyc_submissions k JOIN users u ON u.id = k.user_id';
 
     const countResult = await pool.query<{ count: string }>(
-      \`SELECT COUNT(*)::text AS count ${baseFrom} ${where}\`,
+      `SELECT COUNT(*)::text AS count ${baseFrom} ${where}`,
       params,
     );
     const total = Number(countResult.rows[0]?.count ?? '0');
@@ -251,7 +251,7 @@ export class KycRepository {
     const offsetIdx = params.length;
 
     const selectColumns = notSubmitted
-      ? \`u.id AS id,
+      ? `u.id AS id,
          u.id AS user_id,
          u.branch_id,
          u.full_name AS legal_name,
@@ -265,12 +265,12 @@ export class KycRepository {
          NULL::timestamptz AS reviewed_at,
          NULL::text AS rejection_reason,
          u.created_at,
-         u.created_at AS updated_at,\`
+         u.created_at AS updated_at,`
       : 'k.*,';
 
     const orderColumn = notSubmitted ? 'u.created_at' : 'k.created_at';
     const listResult = await pool.query<KycSubmissionRow>(
-      \`SELECT
+      `SELECT
          ${selectColumns}
          group_tenant.tenant_id AS tenant_id,
          COALESCE(b.name, 'Branch') || ' / ' ||
@@ -290,7 +290,7 @@ export class KycRepository {
        LEFT JOIN circle_configurations cc ON cc.id = u.circle_configuration_id
        ${where}
        ORDER BY ${orderColumn} DESC
-       LIMIT $${limitIdx} OFFSET $${offsetIdx}\`,
+       LIMIT $${limitIdx} OFFSET $${offsetIdx}`,
       params,
     );
 
