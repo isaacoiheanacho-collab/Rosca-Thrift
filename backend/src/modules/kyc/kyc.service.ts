@@ -186,6 +186,7 @@ export class KycService {
     status?: KycStatus;
     branchId?: string;
     tenantId?: string;
+    configurationId?: string;
   }): Promise<{ submissions: KycSubmissionDto[]; total: number }> {
     const { submissions, total } = await kycRepository.list(options);
     const dtos = await Promise.all(submissions.map(toDto));
