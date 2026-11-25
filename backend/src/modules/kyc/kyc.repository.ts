@@ -198,103 +198,62 @@ export class KycRepository {
     tenantId?: string;
     configurationId?: string;
   }): Promise<{ submissions: KycSubmissionRow[]; total: number }> {
-    
-    // 1. Handle users who haven't submitted KYC at all
-    if (options.status === 'NOT_SUBMITTED') {
-      const conditions: string[] = [`u.role = 'SAVER'`, `k.id IS NULL`];
-      const params: unknown[] = [];
-
-      if (options.branchId) {
-        params.push(options.branchId);
-        conditions.push(`u.branch_id = $${params.length}`);
-      }
-      if (options.tenantId) {
-        params.push(options.tenantId);
-        conditions.push(`tm.tenant_id = $${params.length}`);
-      }
-      if (options.configurationId) {
-        params.push(options.configurationId);
-        conditions.push(`u.circle_configuration_id = $${params.length}`);
-      }
-
-      const where = `WHERE ${conditions.join(' AND ')}`;
-      
-      const baseFrom = `
-        FROM users u
-        LEFT JOIN kyc_submissions k ON k.user_id = u.id
-        LEFT JOIN tenant_memberships tm ON tm.user_id = u.id AND tm.status != 'REMOVED'
-        LEFT JOIN tenants t ON t.id = tm.tenant_id
-      `;
-
-      const countResult = await pool.query<{ count: string }>(
-        `SELECT COUNT(*)::text AS count ${baseFrom} ${where}`,
-        params,
-      );
-      const total = Number(countResult.rows[0]?.count ?? '0');
-
-      params.push(options.limit);
-      const limitIdx = params.length;
-      params.push(options.offset);
-      const offsetIdx = params.length;
-
-      // We map user data to fake the KycSubmissionRow format for the frontend
-      const listResult = await pool.query<KycSubmissionRow>(
-        `SELECT 
-           u.id AS id,
-           u.id AS user_id,
-           u.branch_id,
-           u.full_name AS legal_name,
-           u.full_name AS account_name,
-           '' AS selfie_object_key,
-           '' AS bank_name,
-           '' AS account_number,
-           '' AS sort_code,
-           'NOT_SUBMITTED' AS status,
-           u.created_at,
-           u.created_at AS updated_at,
-           t.id AS tenant_id,
-           COALESCE(b.name, 'Branch') || ' / ' || COALESCE(t.name, cc.name || ' (not yet allocated)', 'Unassigned') AS tenant_name
-         ${baseFrom}
-         LEFT JOIN branches b ON b.id = u.branch_id
-         LEFT JOIN circle_configurations cc ON cc.id = u.circle_configuration_id
-         ${where}
-         ORDER BY u.created_at DESC
-         LIMIT $${limitIdx} OFFSET $${offsetIdx}`,
-        params,
-      );
-
-      return { submissions: listResult.rows, total };
-    }
-
-    // 2. Handle standard KYC submissions (Pending/Approved/Rejected)
+    // A saver belongs to a group through users.circle_configuration_id.
+    // Tenant allocation is not required for group KYC visibility.
     const conditions: string[] = [`u.role = 'SAVER'`];
     const params: unknown[] = [];
 
-    if (options.status) {
+    if (options.status === 'NOT_SUBMITTED') {
+      conditions.push('k.id IS NULL');
+    } else if (options.status) {
       params.push(options.status);
       conditions.push(`k.status = $${params.length}`);
     }
+
     if (options.branchId) {
       params.push(options.branchId);
-      conditions.push(`k.branch_id = $${params.length}`);
+      conditions.push(`u.branch_id = $${params.length}`);
     }
-    if (options.tenantId) {
-      params.push(options.tenantId);
-      conditions.push(`tm.tenant_id = $${params.length}`);
-    }
+
     if (options.configurationId) {
       params.push(options.configurationId);
-      conditions.push(`u.circle_configuration_id = $${params.length}`);
+      conditions.push(`(
+        u.circle_configuration_id = $${params.length}
+        OR (
+          u.circle_configuration_id IS NULL
+          AND EXISTS (
+            SELECT 1
+            FROM tenant_memberships tm_legacy
+            JOIN tenants t_legacy ON t_legacy.id = tm_legacy.tenant_id
+            WHERE tm_legacy.user_id = u.id
+              AND tm_legacy.status <> 'REMOVED'
+              AND t_legacy.configuration_id = $${params.length}
+          )
+        )
+      )`);
     }
 
-    const where = `WHERE ${conditions.join(' AND ')}`;
+    if (options.tenantId) {
+      params.push(options.tenantId);
+      conditions.push(`EXISTS (
+        SELECT 1
+        FROM tenant_memberships tm_filter
+        JOIN tenants t_filter ON t_filter.id = tm_filter.tenant_id
+        WHERE tm_filter.user_id = u.id
+          AND tm_filter.tenant_id = $${params.length}
+          AND tm_filter.status <> 'REMOVED'
+          AND (u.circle_configuration_id IS NULL OR t_filter.configuration_id = u.circle_configuration_id)
+      )`);
+    }
+
+    const where = `WHERE ${conditions.join(" AND ")}`;
+    const notSubmitted = options.status === 'NOT_SUBMITTED';
+    const baseFrom = notSubmitted
+      ? 'FROM users u LEFT JOIN kyc_submissions k ON k.user_id = u.id'
+      : 'FROM kyc_submissions k JOIN users u ON u.id = k.user_id';
 
     const countResult = await pool.query<{ count: string }>(
-      `SELECT COUNT(*)::text AS count
-       FROM kyc_submissions k
-       JOIN users u ON u.id = k.user_id
-       LEFT JOIN tenant_memberships tm ON tm.user_id = u.id AND tm.status != 'REMOVED'
-       ${where}`,
+      `SELECT COUNT(*)::text AS count ${baseFrom} ${where}`,
       params,
     );
     const total = Number(countResult.rows[0]?.count ?? '0');
@@ -304,19 +263,46 @@ export class KycRepository {
     params.push(options.offset);
     const offsetIdx = params.length;
 
+    const selectColumns = notSubmitted
+      ? `u.id AS id,
+         u.id AS user_id,
+         u.branch_id,
+         u.full_name AS legal_name,
+         u.full_name AS account_name,
+         NULL::text AS selfie_object_key,
+         NULL::text AS bank_name,
+         NULL::text AS account_number,
+         NULL::text AS sort_code,
+         'NOT_SUBMITTED'::text AS status,
+         NULL::uuid AS reviewed_by,
+         NULL::timestamptz AS reviewed_at,
+         NULL::text AS rejection_reason,
+         u.created_at,
+         u.created_at AS updated_at,`
+      : 'k.*,';
+
+    const orderColumn = notSubmitted ? 'u.created_at' : 'k.created_at';
     const listResult = await pool.query<KycSubmissionRow>(
-      `SELECT 
-         k.*,
-         t.id AS tenant_id,
-         COALESCE(b.name, 'Branch') || ' / ' || COALESCE(t.name, cc.name || ' (not yet allocated)', 'Unassigned') AS tenant_name
-       FROM kyc_submissions k
-       JOIN users u ON u.id = k.user_id
-       LEFT JOIN tenant_memberships tm ON tm.user_id = k.user_id AND tm.status != 'REMOVED'
-       LEFT JOIN tenants t ON t.id = tm.tenant_id
-       LEFT JOIN branches b ON b.id = k.branch_id
+      `SELECT
+         ${selectColumns}
+         group_tenant.tenant_id AS tenant_id,
+         COALESCE(b.name, 'Branch') || ' / ' ||
+           COALESCE(group_tenant.name, cc.name || ' (not yet allocated)', 'Unassigned') AS tenant_name
+       ${baseFrom}
+       LEFT JOIN LATERAL (
+         SELECT tm.tenant_id, t.name
+         FROM tenant_memberships tm
+         JOIN tenants t ON t.id = tm.tenant_id
+         WHERE tm.user_id = u.id
+           AND tm.status <> 'REMOVED'
+           AND (u.circle_configuration_id IS NULL OR t.configuration_id = u.circle_configuration_id)
+         ORDER BY tm.joined_at DESC
+         LIMIT 1
+       ) group_tenant ON TRUE
+       LEFT JOIN branches b ON b.id = u.branch_id
        LEFT JOIN circle_configurations cc ON cc.id = u.circle_configuration_id
        ${where}
-       ORDER BY k.created_at DESC
+       ORDER BY ${orderColumn} DESC
        LIMIT $${limitIdx} OFFSET $${offsetIdx}`,
       params,
     );

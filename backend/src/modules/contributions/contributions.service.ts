@@ -50,6 +50,8 @@ export interface ContributionIntentDto {
     sortCode: string;
   } | null;
   createdAt: string;
+  tenantName?: string | null;
+  userName?: string | null;
 }
 
 export interface ContributionDto {
@@ -174,6 +176,8 @@ async function intentToDto(
     receiptRejectionReason: receiptStatus === 'REJECTED' ? receipt?.review_note ?? null : null,
     targetAccount,
     createdAt: row.created_at.toISOString(),
+    tenantName: row.tenant_name ?? null,
+    userName: row.user_name ?? null,
   };
 }
 

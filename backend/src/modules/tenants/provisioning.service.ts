@@ -80,10 +80,29 @@ export class ProvisioningService {
       ? { contributionWindowDays: 5, cycleDurationDays: 7 }
       : { contributionWindowDays: 21, cycleDurationDays: 30 };
 
-    // 2. Already provisioned?
-    const existing = await tenantsRepository.findMembershipByUser(userId);
+    // 2. Existing membership must belong to the saver’s selected group.
+    // Never treat membership in another configuration as valid for this group.
+    const existingResult = await pool.query<{
+      tenant_id: string;
+      slot_number: number;
+      configuration_id: string;
+    }>(
+      `SELECT tm.tenant_id, tm.slot_number, t.configuration_id
+       FROM tenant_memberships tm
+       JOIN tenants t ON t.id = tm.tenant_id
+       WHERE tm.user_id = $1 AND tm.status <> 'REMOVED'
+       ORDER BY tm.joined_at DESC
+       LIMIT 1`,
+      [userId],
+    );
+    const existing = existingResult.rows[0];
     if (existing) {
-      logger.debug({ userId, tenantId: existing.tenant_id }, 'Already provisioned');
+      if (existing.configuration_id !== configurationId) {
+        throw new Error(
+          `Saver ${userId} has an active membership in configuration ${existing.configuration_id}, but selected configuration is ${configurationId}. Manual reconciliation is required.`,
+        );
+      }
+      logger.debug({ userId, tenantId: existing.tenant_id, configurationId }, 'Already provisioned in selected group');
       return {
         tenantId: existing.tenant_id,
         slotNumber: existing.slot_number,
