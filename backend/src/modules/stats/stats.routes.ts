@@ -175,7 +175,15 @@ branchAdminStatsRouter.get(
         branchId = fromQuery;
       }
 
-      const stats = await statsService.getBranchAdminStats(branchId);
+      const configurationId = req.query.configurationId ? String(req.query.configurationId) : undefined;
+      if (configurationId) {
+        const { rows } = await (await import('../../db.js')).pool.query(
+          'SELECT id FROM circle_configurations WHERE id = $1 AND branch_id = $2',
+          [configurationId, branchId],
+        );
+        if (!rows.length) throw new AppError({ code: 'STATS_CONFIGURATION_INVALID', httpStatus: 400, message: 'Selected group does not belong to this branch' });
+      }
+      const stats = await statsService.getBranchAdminStats(branchId, configurationId);
       res.json({ ok: true, data: stats });
     } catch (err) {
       next(err);
