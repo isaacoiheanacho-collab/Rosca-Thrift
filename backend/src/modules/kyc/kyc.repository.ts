@@ -218,7 +218,7 @@ export class KycRepository {
     if (options.configurationId) {
       params.push(options.configurationId);
       conditions.push(`(
-        u.circle_configuration_id = ${params.length}
+        u.circle_configuration_id = $${params.length}
         OR (
           u.circle_configuration_id IS NULL
           AND EXISTS (
@@ -227,7 +227,7 @@ export class KycRepository {
             JOIN tenants t_legacy ON t_legacy.id = tm_legacy.tenant_id
             WHERE tm_legacy.user_id = u.id
               AND tm_legacy.status <> 'REMOVED'
-              AND t_legacy.configuration_id = ${params.length}
+              AND t_legacy.configuration_id = $${params.length}
           )
         )
       )`);
@@ -295,7 +295,7 @@ export class KycRepository {
          JOIN tenants t ON t.id = tm.tenant_id
          WHERE tm.user_id = u.id
            AND tm.status <> 'REMOVED'
-           AND t.configuration_id = u.circle_configuration_id
+           AND (u.circle_configuration_id IS NULL OR t.configuration_id = u.circle_configuration_id)
          ORDER BY tm.joined_at DESC
          LIMIT 1
        ) group_tenant ON TRUE
