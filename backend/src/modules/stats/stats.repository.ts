@@ -454,7 +454,21 @@ export class StatsRepository {
       pool.query<{ count: string }>(
         `SELECT COUNT(*)::text AS count FROM users
          WHERE role = 'SAVER' AND branch_id = $1
-           AND ($2::uuid IS NULL OR circle_configuration_id = $2)`,
+           AND (
+           $2::uuid IS NULL
+           OR circle_configuration_id = $2
+           OR (
+             circle_configuration_id IS NULL
+             AND EXISTS (
+               SELECT 1
+               FROM tenant_memberships tm
+               JOIN tenants t ON t.id = tm.tenant_id
+               WHERE tm.user_id = users.id
+                 AND tm.status <> 'REMOVED'
+                 AND t.configuration_id = $2
+             )
+           )
+         )`,
         [branchId, configurationId ?? null],
       ),
       pool.query<{ status: string; count: string }>(
@@ -462,7 +476,21 @@ export class StatsRepository {
          FROM kyc_submissions k
          JOIN users u ON u.id = k.user_id
          WHERE k.branch_id = $1 AND u.role = 'SAVER'
-           AND ($2::uuid IS NULL OR u.circle_configuration_id = $2)
+           AND (
+             $2::uuid IS NULL
+             OR u.circle_configuration_id = $2
+             OR (
+               u.circle_configuration_id IS NULL
+               AND EXISTS (
+                 SELECT 1
+                 FROM tenant_memberships tm
+                 JOIN tenants t ON t.id = tm.tenant_id
+                 WHERE tm.user_id = u.id
+                   AND tm.status <> 'REMOVED'
+                   AND t.configuration_id = $2
+               )
+             )
+           )
          GROUP BY k.status`,
         [branchId, configurationId ?? null],
       ),
