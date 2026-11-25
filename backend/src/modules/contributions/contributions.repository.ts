@@ -303,7 +303,7 @@ export class ContributionsRepository {
        JOIN users u ON u.id = i.user_id
        ${where}
        ORDER BY i.deadline_at ASC, i.slot_number ASC
-       LIMIT ${limitIdx} OFFSET ${offsetIdx}`,
+       LIMIT $${limitIdx} OFFSET $${offsetIdx}`,
       params,
     );
 
