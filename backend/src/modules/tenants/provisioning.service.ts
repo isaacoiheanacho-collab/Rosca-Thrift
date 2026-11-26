@@ -64,12 +64,10 @@ export class ProvisioningService {
     }
 
     const selection = await pool.query<{ circle_configuration_id: string | null }>('SELECT circle_configuration_id FROM users WHERE id = $1', [userId]);
-    let configurationId = selection.rows[0]?.circle_configuration_id ?? null;
+    const configurationId = selection.rows[0]?.circle_configuration_id ?? null;
     if (!configurationId) {
-      const legacy = await pool.query<{ id: string }>("SELECT id FROM circle_configurations WHERE branch_id = $1 AND is_legacy = TRUE LIMIT 1", [branchId]);
-      configurationId = legacy.rows[0]?.id ?? null;
+      throw new Error('No circle configuration selected for this saver. Select a circle configuration before provisioning.');
     }
-    if (!configurationId) throw new Error('No circle configuration selected for this saver');
     const configResult = await pool.query<{ member_capacity: number; contribution_amount: string; contribution_frequency: 'WEEKLY' | 'MONTHLY'; name: string }>(
       'SELECT member_capacity, contribution_amount::text, contribution_frequency, name FROM circle_configurations WHERE id = $1 AND branch_id = $2',
       [configurationId, branchId],
