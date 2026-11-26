@@ -50,7 +50,7 @@ tenantsRouter.get('/me', requireAuth, async (req: Request, res: Response, next: 
     }
 
     // ─────────────────────────────────────────────────────────────
-    // Check if the current cycle has all 12 contributions confirmed.
+    // Check whether all configured member contributions for the current cycle are confirmed.
     // Only if so is the payout intent meaningful to display.
     // ─────────────────────────────────────────────────────────────
     const cycleCountRes = await pool.query<{ count: string }>(
