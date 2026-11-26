@@ -304,6 +304,24 @@ export class ContributionsService {
         cycle,
       );
 
+      // Resolve the contribution from the tenant's immutable configuration
+      // association. Never silently create a zero-value intent if configuration
+      // data is missing or the tenant points to an invalid configuration.
+      const configurationResult = await pool.query<{ contribution_amount: string }>(
+        `SELECT contribution_amount::text
+         FROM circle_configurations
+         WHERE id = $1 AND branch_id = $2`,
+        [tenant.configuration_id, tenant.branch_id],
+      );
+      const configuredAmount = configurationResult.rows[0]?.contribution_amount;
+      if (!configuredAmount || !/^[1-9][0-9]*$/.test(configuredAmount)) {
+        throw new AppError({
+          code: 'CONTRIB_CONFIGURATION_AMOUNT_INVALID',
+          httpStatus: 500,
+          message: 'The tenant savings configuration has no valid contribution amount. Please contact your Community Admin.',
+        });
+      }
+
       intent = await contributionsRepository.insertIntent({
         tenantId: tenant.id,
         userId,
@@ -313,7 +331,7 @@ export class ContributionsService {
         cycle,
         slotNumber: membership.slot_number,
         reference,
-        expectedAmount: BigInt((await pool.query<{ contribution_amount: string }>('SELECT contribution_amount::text FROM circle_configurations WHERE id = $1', [tenant.configuration_id])).rows[0]?.contribution_amount ?? '0'),
+        expectedAmount: BigInt(configuredAmount),
         deadlineAt: tenant.cycle_contribution_deadline_at,
       });
 
