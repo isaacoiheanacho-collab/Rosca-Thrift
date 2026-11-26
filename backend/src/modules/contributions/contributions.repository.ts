@@ -581,7 +581,7 @@ export class ContributionsRepository {
 
   // ---- Tenant visibility queries ----
 
-  /** All 12 members' status for a given tenant cycle. */
+  /** All configured Co-Savers' statuses for a given tenant cycle. */
   async listTenantCycleMembers(
     tenantId: string,
     tenure: number,
