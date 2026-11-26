@@ -50,7 +50,7 @@ BEGIN
       USING ERRCODE = '23514';
   END IF;
 
-  IF TG_TABLE_NAME = 'tenure_renewals' THEN
+  IF TG_TABLE_NAME IN ('tenure_renewals', 'tenant_memberships') THEN
     requested_slot := NEW.slot_number;
     IF requested_slot < 1 OR requested_slot > configured_capacity THEN
       RAISE EXCEPTION 'Renewal slot % is outside tenant capacity 1-%',
@@ -94,3 +94,28 @@ DROP TRIGGER IF EXISTS trg_tenure_renewal_dynamic_slot ON tenure_renewals;
 CREATE TRIGGER trg_tenure_renewal_dynamic_slot
   BEFORE INSERT OR UPDATE ON tenure_renewals
   FOR EACH ROW EXECUTE FUNCTION enforce_tenant_collection_position();
+
+DROP TRIGGER IF EXISTS trg_tenant_membership_dynamic_slot ON tenant_memberships;
+CREATE TRIGGER trg_tenant_membership_dynamic_slot
+  BEFORE INSERT OR UPDATE ON tenant_memberships
+  FOR EACH ROW EXECUTE FUNCTION enforce_tenant_collection_position();
+
+-- Keep the tenant's live cycle within the configured collection positions.
+CREATE OR REPLACE FUNCTION enforce_tenant_current_cycle_capacity()
+RETURNS TRIGGER
+LANGUAGE plpgsql
+AS $
+BEGIN
+  IF NEW.current_cycle < 0 OR NEW.current_cycle > NEW.member_capacity_snapshot THEN
+    RAISE EXCEPTION 'Current cycle % is outside configured tenant capacity 0-%',
+      NEW.current_cycle, NEW.member_capacity_snapshot
+      USING ERRCODE = '23514';
+  END IF;
+  RETURN NEW;
+END;
+$;
+
+DROP TRIGGER IF EXISTS trg_tenant_current_cycle_capacity ON tenants;
+CREATE TRIGGER trg_tenant_current_cycle_capacity
+  BEFORE INSERT OR UPDATE OF current_cycle, member_capacity_snapshot ON tenants
+  FOR EACH ROW EXECUTE FUNCTION enforce_tenant_current_cycle_capacity();
