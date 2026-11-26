@@ -279,12 +279,31 @@ export class TenantsService {
 
   async createTenantForBranch(
     branchId: string,
+    configurationId: string,
     actorId: string,
     meta: RequestMeta,
   ): Promise<TenantDto> {
-    const legacy = await (await import('../../db.js')).pool.query<{id:string;member_capacity:number;cycle_duration_days:number;contribution_window_days:number}>("SELECT id, member_capacity, cycle_duration_days, contribution_window_days FROM circle_configurations WHERE branch_id = $1 AND is_legacy = TRUE LIMIT 1", [branchId]);
-    if (!legacy.rows[0]) throw new NotFoundError('Legacy circle configuration');
-    const tenant = await tenantsRepository.insert(branchId, legacy.rows[0].id, legacy.rows[0].member_capacity, legacy.rows[0].cycle_duration_days, legacy.rows[0].contribution_window_days, null);
+    const configuration = await pool.query<{
+      member_capacity: number;
+      cycle_duration_days: number;
+      contribution_window_days: number;
+    }>(
+      `SELECT member_capacity, cycle_duration_days, contribution_window_days
+       FROM circle_configurations
+       WHERE id = $1 AND branch_id = $2`,
+      [configurationId, branchId],
+    );
+    const selected = configuration.rows[0];
+    if (!selected) throw new NotFoundError('Circle configuration');
+
+    const tenant = await tenantsRepository.insert(
+      branchId,
+      configurationId,
+      selected.member_capacity,
+      selected.cycle_duration_days,
+      selected.contribution_window_days,
+      null,
+    );
 
     await record({
       actorId,
@@ -293,10 +312,10 @@ export class TenantsService {
       entityId: tenant.id,
       ipAddress: meta.ipAddress,
       userAgent: meta.userAgent,
-      metadata: { branchId },
+      metadata: { branchId, configurationId },
     });
 
-    logger.info({ tenantId: tenant.id, branchId }, 'Tenant created');
+    logger.info({ tenantId: tenant.id, branchId, configurationId }, 'Tenant created');
     return toTenantDto(tenant);
   }
 
