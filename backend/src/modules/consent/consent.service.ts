@@ -114,7 +114,7 @@ export class ConsentService {
         allowed: false,
         reason:
           'You cannot withdraw consent while your circle is running. ' +
-          'You can withdraw at the end of your 12-month tenure, ' +
+          'You can withdraw at the end of your current circle tenure, ' +
           'or by declining renewal when the vote opens.',
         activeTenantId: row.tenant_id,
       };
