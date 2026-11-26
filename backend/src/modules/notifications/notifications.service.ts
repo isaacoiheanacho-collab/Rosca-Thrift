@@ -508,7 +508,7 @@ export class NotificationsService {
       branchId: params.branchId,
       kind: 'TENANT_ACTIVATED',
       title: 'Your circle is full',
-      body: `All 12 members are in. Cycle 1 begins now. First contribution due by ${deadline}.`,
+      body: `All configured Co-Savers are in. Cycle 1 begins now. First contribution due by ${deadline}.`,
       metadata: { deadlineAt: params.cycleContributionDeadlineAt.toISOString() },
     });
   }
