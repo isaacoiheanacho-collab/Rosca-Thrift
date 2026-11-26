@@ -1,7 +1,7 @@
 name: Dynamic circle upgrade checks
 on:
   push:
-    branches: [feature/dynamic-circle-configurations]
+    branches: [main, feature/dynamic-circle-configurations]
     paths:
       - 'backend/**'
       - '.github/workflows/dynamic-circle-checks.yml'
@@ -23,6 +23,9 @@ jobs:
       - name: Type-check backend
         working-directory: backend
         run: npm run typecheck
+      - name: Build backend
+        working-directory: backend
+        run: npm run build
       - name: Test dynamic TVC calculations
         working-directory: backend
         run: npm run test:dynamic-tvc
