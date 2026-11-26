@@ -15,7 +15,7 @@
  *   POST  /api/branch-admin/contributions/tenants/:tenantId/remind - send reminder
  *
  * Tenant-wide visibility (any member of a tenant):
- *   GET /api/tenants/me/contributions   - all 12 members' statuses
+ *   GET /api/tenants/me/contributions   - all configured Co-Savers' statuses
  *   GET /api/tenants/me/ledger          - tenant ledger
  *   GET /api/tenants/me/receipts        - receipt gallery
  */
