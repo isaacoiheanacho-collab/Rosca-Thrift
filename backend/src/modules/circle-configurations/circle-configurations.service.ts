@@ -43,6 +43,7 @@ export class CircleConfigurationsService {
               contribution_window_days, cycle_duration_days, created_at
        FROM circle_configurations
        WHERE branch_id = $1
+         AND is_legacy = FALSE
        ORDER BY created_at ASC`,
       [branch.rows[0].id],
     );
