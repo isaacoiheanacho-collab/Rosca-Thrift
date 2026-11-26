@@ -26,7 +26,7 @@ function verifyCircle(memberCount: number, contributionPence: bigint) {
   }
 }
 
-for (const n of [2, 3, 4, 5, 6, 10, 12]) {
+for (const n of [2, 3, 4, 5, 6, 10, 12, 13, 25, 50, 75, 100]) {
   verifyCircle(n, 100000n);
 }
 
@@ -44,4 +44,4 @@ assert.equal(fee.net, 935750n);
 assert.throws(() => calculateTvc(100000n, 1, 100000n, 1));
 assert.throws(() => calculateTvc(300000n, 4, 100000n, 3));
 
-console.log('Dynamic TVC tests passed for 2, 3, 4, 5, 6, 10 and 12-member circles.');
+console.log('Dynamic TVC tests passed for capacities 2, 3, 4, 5, 6, 10, 12, 13, 25, 50, 75 and 100.');
