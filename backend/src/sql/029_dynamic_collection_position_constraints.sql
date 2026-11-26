@@ -21,6 +21,13 @@ ALTER TABLE tenure_renewals
 ALTER TABLE tenure_renewals
   ADD CONSTRAINT tenure_renewals_slot_number_positive CHECK (slot_number >= 1);
 
+-- The database was reset before this migration. Remove empty-database legacy
+-- 12-member seed configurations; circles must now be created from an explicitly
+-- selected configuration created by the branch administrator.
+DELETE FROM circle_configurations c
+WHERE c.is_legacy = TRUE
+  AND NOT EXISTS (SELECT 1 FROM tenants t WHERE t.configuration_id = c.id);
+
 -- Enforce the configured capacity at the database boundary. This protects
 -- inserts from every application path, not only the API validation layer.
 CREATE OR REPLACE FUNCTION enforce_tenant_collection_position()
