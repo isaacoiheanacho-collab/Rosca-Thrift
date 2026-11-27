@@ -1,4 +1,4 @@
-import { createHash, createHmac, randomInt, randomUUID } from 'node:crypto';
+import { createHash, createHmac, randomInt, randomUUID, timingSafeEqual } from 'node:crypto';
 import jwt from 'jsonwebtoken';
 import { env } from '../../config/env';
 import { AppError } from '../../errors/AppError';
@@ -89,4 +89,22 @@ export async function getProfile(userId: string) {
   const user = await repo.findUserById(userId);
   if (!user) throw new AppError({ code: 'USER_NOT_FOUND', httpStatus: 404, message: 'User not found' });
   return publicUser(user);
+}
+
+export async function bootstrapSuperAdmin(userId: string, suppliedSecret: string) {
+  if (!env.SUPER_ADMIN_PHONE) {
+    throw new AppError({ code: 'SUPER_ADMIN_BOOTSTRAP_DISABLED', httpStatus: 403, message: 'Super administrator bootstrap is not configured' });
+  }
+  const expected = Buffer.from(env.SUPER_ADMIN_REGISTRATION_SECRET);
+  const supplied = Buffer.from(suppliedSecret);
+  if (expected.length !== supplied.length || !timingSafeEqual(expected, supplied)) {
+    throw new AppError({ code: 'SUPER_ADMIN_SECRET_INVALID', httpStatus: 403, message: 'Registration secret is invalid' });
+  }
+  const user = await repo.findUserById(userId);
+  if (!user || user.phone_e164 !== env.SUPER_ADMIN_PHONE || !user.phone_verified_at) {
+    throw new AppError({ code: 'SUPER_ADMIN_PHONE_MISMATCH', httpStatus: 403, message: 'This verified phone is not authorised for super administrator bootstrap' });
+  }
+  const promoted = await repo.promoteSuperAdmin(userId);
+  if (!promoted) throw new AppError({ code: 'USER_NOT_FOUND', httpStatus: 404, message: 'User account not found' });
+  return publicUser(promoted);
 }
