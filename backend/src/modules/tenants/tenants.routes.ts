@@ -95,6 +95,11 @@ router.post('/join', requireAuth, asyncRoute(async (req, res) => {
        VALUES ($1, $2, $3, 'tenant_member', $4, 'member_joined', 'registered', $5::jsonb)`,
       [config.branch_id, tenant.id, user.id, memberResult.rows[0].id, JSON.stringify({ position, capacity: tenant.capacity })],
     );
+    await tx.query(
+      `INSERT INTO notifications (user_id, tenant_id, channel, notification_type, payload, status, sent_at)
+       VALUES ($1, $2, 'in_app', 'tenant.member_joined', $3::jsonb, 'sent', NOW())`,
+      [user.id, tenant.id, JSON.stringify({ position, capacity: tenant.capacity, tenantSequence: tenant.tenant_sequence })],
+    );
 
     return {
       tenantId: tenant.id,
@@ -211,6 +216,12 @@ router.patch('/:tenantId/members/:memberId/verification', requireAuth, asyncRout
           (branch_id, tenant_id, actor_user_id, entity_type, entity_id, event_type, previous_state, new_state, metadata)
          VALUES ($1, $2, $3, 'tenant', $2, 'tenant_activated', 'awaiting_verification', 'active', $4::jsonb)`,
         [tenant.branch_id, tenantId, req.auth!.userId, JSON.stringify({ capacity: tenant.capacity, durationPeriods: config.duration_periods, frequency: config.frequency })],
+      );
+      await tx.query(
+        `INSERT INTO notifications (user_id, tenant_id, channel, notification_type, payload, status, sent_at)
+         SELECT user_id, $1, 'in_app', 'tenant.activated', $2::jsonb, 'sent', NOW()
+         FROM tenant_members WHERE tenant_id = $1 AND registration_status = 'registered'`,
+        [tenantId, JSON.stringify({ capacity: tenant.capacity, durationPeriods: config.duration_periods, frequency: config.frequency })],
       );
       activated = true;
     }
