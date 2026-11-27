@@ -1,6 +1,5 @@
 import { Router, type Request, type Response, type NextFunction } from 'express';
 import { randomUUID } from 'node:crypto';
-import path from 'node:path';
 import multer from 'multer';
 import { z } from 'zod';
 import { pool } from '../../db';
