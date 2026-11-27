@@ -39,9 +39,10 @@ FOR EACH ROW EXECUTE FUNCTION enforce_tenant_member_position();
 
 CREATE FUNCTION enforce_tenant_activation_and_completion()
 RETURNS TRIGGER AS $$
-DECLARE occupied_count INTEGER;
-DECLARE verified_count INTEGER;
-DECLARE paid_count INTEGER;
+DECLARE
+  occupied_count INTEGER;
+  verified_count INTEGER;
+  paid_count INTEGER;
 BEGIN
   IF NEW.status = 'active' AND OLD.status IS DISTINCT FROM 'active' THEN
     SELECT
@@ -121,12 +122,13 @@ FOR EACH ROW EXECUTE FUNCTION enforce_contribution_period_bounds();
 
 CREATE FUNCTION enforce_payout_configuration_math()
 RETURNS TRIGGER AS $$
-DECLARE configured_amount BIGINT;
-DECLARE configured_capacity INTEGER;
-DECLARE configured_positions INTEGER;
-DECLARE expected_tvc BIGINT;
-DECLARE expected_fee BIGINT;
-DECLARE member_position INTEGER;
+DECLARE
+  configured_amount BIGINT;
+  configured_capacity INTEGER;
+  configured_positions INTEGER;
+  expected_tvc BIGINT;
+  expected_fee BIGINT;
+  member_position INTEGER;
 BEGIN
   SELECT c.contribution_amount_pence, t.capacity, c.collection_positions
   INTO configured_amount, configured_capacity, configured_positions
