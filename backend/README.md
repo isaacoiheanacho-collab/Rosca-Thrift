@@ -60,6 +60,7 @@ OTP hashes are keyed, short-lived and attempt-limited. Refresh tokens are stored
 | PATCH | `/api/branch-admin/payouts/intents/:intentId/status` | Approve, pay, fail or reverse payout |
 | POST/GET | `/api/branch-admin/pool-account` and `/:branchId` | Manage branch-controlled account references |
 | GET | `/api/branch-admin/ledger/branch/:branchId` | Read branch-scoped ledger entries |
+| GET | `/api/branch-admin/stats/branch/:branchId` | Dynamic branch statistics |
 | GET/PATCH | `/api/notifications` and `/:notificationId/read` | Read and mark own in-app notifications |
 | POST | `/api/receipts` | Upload private PDF/JPEG/PNG receipt (multipart field `file`) |
 | GET | `/api/receipts/:receiptId` | Obtain a short-lived authorised download URL |
