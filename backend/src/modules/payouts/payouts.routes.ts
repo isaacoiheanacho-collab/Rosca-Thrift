@@ -108,10 +108,10 @@ router.patch('/intents/:intentId/status', requireAuth, asyncRoute(async (req, re
   const input = statusSchema.parse(req.body);
   const updated = await withTransaction(async (tx) => {
     const found = await tx.query<{
-      id:string;tenant_id:string;branch_id:string;status:string;net_payout_pence:string;
+      id:string;tenant_id:string;branch_id:string;status:string;net_payout_pence:string;capacity:number;
       platform_fee_pence:string;recipient_member_id:string;
     }>(
-      `SELECT pi.id, pi.tenant_id, t.branch_id, pi.status, pi.net_payout_pence,
+      `SELECT pi.id, pi.tenant_id, t.branch_id, t.capacity, pi.status, pi.net_payout_pence,
               pi.platform_fee_pence, pi.recipient_member_id
        FROM payout_intents pi JOIN tenants t ON t.id = pi.tenant_id
        WHERE pi.id = $1 FOR UPDATE OF pi`,
@@ -161,6 +161,19 @@ router.patch('/intents/:intentId/status', requireAuth, asyncRoute(async (req, re
           [intent.branch_id, intent.tenant_id, (-BigInt(intent.platform_fee_pence)).toString(), intent.id, input.paymentReference],
         );
       }
+      const paidCount = await tx.query<{count:number}>(
+        "SELECT COUNT(*)::int AS count FROM payout_intents WHERE tenant_id = $1 AND status = 'paid'",
+        [intent.tenant_id],
+      );
+      if (paidCount.rows[0].count === intent.capacity) {
+        await tx.query("UPDATE tenants SET status = 'completed' WHERE id = $1 AND status = 'active'", [intent.tenant_id]);
+        await tx.query(
+          `INSERT INTO lifecycle_events
+            (branch_id, tenant_id, actor_user_id, entity_type, entity_id, event_type, previous_state, new_state, metadata)
+           VALUES ($1, $2, $3, 'tenant', $2, 'tenure_completed', 'active', 'completed', $4::jsonb)`,
+          [intent.branch_id, intent.tenant_id, req.auth!.userId, JSON.stringify({ paidPositions: paidCount.rows[0].count })],
+        );
+      }
     }
     if (input.status === 'reversed') {
       await tx.query("UPDATE payouts SET status = 'reversed' WHERE payout_intent_id = $1", [intentId]);
@@ -179,6 +192,13 @@ router.patch('/intents/:intentId/status', requireAuth, asyncRoute(async (req, re
           [intent.branch_id, intent.tenant_id, BigInt(intent.platform_fee_pence).toString(), intent.id, input.paymentReference ?? null],
         );
       }
+      await tx.query("UPDATE tenants SET status = 'active' WHERE id = $1 AND status = 'completed'", [intent.tenant_id]);
+      await tx.query(
+        `INSERT INTO lifecycle_events
+          (branch_id, tenant_id, actor_user_id, entity_type, entity_id, event_type, previous_state, new_state)
+         VALUES ($1, $2, $3, 'tenant', $2, 'payout_reversed', 'completed', 'active')`,
+        [intent.branch_id, intent.tenant_id, req.auth!.userId],
+      );
     }
     return result.rows[0];
   });
