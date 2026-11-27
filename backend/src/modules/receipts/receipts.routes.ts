@@ -64,6 +64,11 @@ async function assertReceiptAccess(
 
 router.post('/', requireAuth, upload.single('file'), asyncRoute(async (req, res) => {
   if (!req.file) throw new AppError({ code: 'RECEIPT_FILE_REQUIRED', httpStatus: 400, message: 'Attach a receipt file' });
+  const signatureValid =
+    (req.file.mimetype === 'application/pdf' && req.file.buffer.subarray(0, 5).toString('ascii') === '%PDF-') ||
+    (req.file.mimetype === 'image/jpeg' && req.file.buffer[0] === 0xff && req.file.buffer[1] === 0xd8 && req.file.buffer[2] === 0xff) ||
+    (req.file.mimetype === 'image/png' && req.file.buffer.subarray(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])));
+  if (!signatureValid) throw new AppError({ code: 'RECEIPT_CONTENT_INVALID', httpStatus: 400, message: 'The uploaded file content does not match its declared file type' });
   const reference = referenceSchema.parse({
     contributionId: req.body.contributionId,
     payoutId: req.body.payoutId,
