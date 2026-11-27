@@ -48,3 +48,12 @@ test('rejects invalid amounts, capacities and positions', () => {
   assert.throws(() => calculateTvcAdjustmentPence(100n, 0, 1), /capacity/);
   assert.throws(() => calculateTvcAdjustmentPence(100n, 5, 6), /position/);
 });
+
+test('never exceeds half a contribution for odd penny amounts', () => {
+  const adjustments = [1, 2, 3, 4, 5].map((position) =>
+    calculateTvcAdjustmentPence(10_001n, 5, position),
+  );
+  assert.deepEqual(adjustments, [-5_000n, -2_500n, 0n, 2_500n, 5_000n]);
+  assert.equal(adjustments.reduce((sum, value) => sum + value, 0n), 0n);
+  assert.ok(adjustments.every((value) => value * 2n <= 10_001n && value * 2n >= -10_001n));
+});
