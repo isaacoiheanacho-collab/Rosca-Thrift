@@ -187,3 +187,22 @@ BEFORE INSERT OR UPDATE OF tenant_id, collection_position, recipient_member_id,
   gross_pool_pence, tvc_adjustment_pence, amount_after_tvc_pence,
   platform_fee_bps, platform_fee_pence ON payout_intents
 FOR EACH ROW EXECUTE FUNCTION enforce_payout_configuration_math();
+
+CREATE FUNCTION enforce_kyc_member_owner()
+RETURNS TRIGGER AS $$
+DECLARE member_user_id UUID;
+BEGIN
+  IF NEW.tenant_member_id IS NOT NULL THEN
+    SELECT user_id INTO member_user_id
+    FROM tenant_members WHERE id = NEW.tenant_member_id;
+    IF member_user_id IS NULL OR member_user_id <> NEW.user_id THEN
+      RAISE EXCEPTION 'KYC record user must match its tenant member';
+    END IF;
+  END IF;
+  RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE TRIGGER kyc_member_owner_guard
+BEFORE INSERT OR UPDATE OF user_id, tenant_member_id ON kyc_records
+FOR EACH ROW EXECUTE FUNCTION enforce_kyc_member_owner();
