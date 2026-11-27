@@ -154,11 +154,17 @@ BEGIN
   IF configured_capacity = 1 THEN
     expected_tvc := 0;
   ELSE
-    expected_tvc := ROUND(
-      configured_amount::NUMERIC
-      * (2 * NEW.collection_position - configured_capacity - 1)::NUMERIC
-      / (2 * (configured_capacity - 1))
-    )::BIGINT;
+    expected_tvc := GREATEST(
+      -FLOOR(configured_amount::NUMERIC / 2)::BIGINT,
+      LEAST(
+        ROUND(
+          configured_amount::NUMERIC
+          * (2 * NEW.collection_position - configured_capacity - 1)::NUMERIC
+          / (2 * (configured_capacity - 1))
+        )::BIGINT,
+        FLOOR(configured_amount::NUMERIC / 2)::BIGINT
+      )
+    );
   END IF;
   IF NEW.tvc_adjustment_pence <> expected_tvc
      OR ABS(NEW.tvc_adjustment_pence) * 2 > configured_amount THEN
