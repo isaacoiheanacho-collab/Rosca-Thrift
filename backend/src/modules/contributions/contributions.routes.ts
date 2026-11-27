@@ -45,9 +45,11 @@ router.post('/', requireAuth, asyncRoute(async (req, res) => {
     const result = await tx.query(
       `INSERT INTO contributions (tenant_id, period_id, tenant_member_id, amount_pence, idempotency_key)
        VALUES ($1, $2, $3, $4, $5)
+       ON CONFLICT (idempotency_key) DO NOTHING
        RETURNING id, tenant_id, period_id, tenant_member_id, amount_pence, status, created_at`,
       [input.tenantId, input.periodId, row.member_id, input.amountPence, input.idempotencyKey],
     );
+    if (!result.rowCount) throw new AppError({ code: 'DUPLICATE_IDEMPOTENCY_KEY', httpStatus: 409, message: 'This contribution request has already been submitted' });
     return result.rows[0];
   });
   res.status(201).json({ ok: true, data: created });
