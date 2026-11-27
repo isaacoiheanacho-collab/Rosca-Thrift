@@ -9,45 +9,10 @@ import { logger } from './logger';
 import { pool, testConnection } from './db';
 import { redis, testRedis, closeRedis } from './utils/redis';
 import { testS3 } from './utils/s3';
-import { stopAllWorkers } from './queue';
-import { initSocketIO, closeSocketIO } from './modules/realtime/socket';
-import { ensureWebPushInitialised } from './utils/web-push';
 import { requestId } from './middleware/requestId';
 import { errorHandler, notFoundHandler } from './middleware/errorHandler';
 import { generalLimiter, authLimiter } from './middleware/rateLimit';
-import {
-  authRoutes,
-  usersRoutes,
-  publicBranchesRouter,
-  superAdminBranchesRouter,
-  branchTrustAccountRouter,
-  branchAdminBranchesRouter,
-  kycRouter,
-  branchAdminKycRouter,
-  superAdminKycRouter,
-  tenantsRouter,
-  branchAdminTenantsRouter,
-  superAdminTenantsRouter,
-  tenantRenewalRouter,
-  branchAdminRenewalRouter,
-  contributionsRouter,
-  branchAdminContributionsRouter,
-  tenantVisibilityRouter,
-  receiptsRouter,
-  branchAdminPoolAccountRouter,
-  saverPoolAccountRouter,
-  superAdminMaintenanceAccountRouter,
-  superAdminBranchPoolAccountRouter,
-  branchAdminPayoutsRouter,
-  superAdminPayoutsRouter,
-  tenantPayoutVisibilityRouter,
-  notificationsRouter,
-  superAdminStatsRouter,
-  branchAdminStatsRouter,
-  publicCircleConfigurationsRouter,
-  branchAdminCircleConfigurationsRouter,
-} from './modules';
-import authSessionsRouter from './modules/auth/auth.sessions';
+import { authRoutes } from './modules/auth/auth.routes';
 
 const app = express();
 
@@ -62,12 +27,7 @@ app.use((req: Request, res: Response, next) => {
   const start = Date.now();
   res.on('finish', () => {
     req.log.info(
-      {
-        method: req.method,
-        path: req.path,
-        status: res.statusCode,
-        durationMs: Date.now() - start,
-      },
+      { method: req.method, path: req.path, status: res.statusCode, durationMs: Date.now() - start },
       'request',
     );
   });
@@ -77,7 +37,6 @@ app.use((req: Request, res: Response, next) => {
 app.get('/health', async (_req: Request, res: Response) => {
   const [db, cache, storage] = await Promise.all([testConnection(), testRedis(), testS3()]);
   const ok = db.ok && cache.ok && storage.ok;
-
   res.status(ok ? 200 : 503).json({
     ok,
     service: 'rosca-backend',
@@ -90,111 +49,29 @@ app.get('/health', async (_req: Request, res: Response) => {
 });
 
 app.get('/', (_req: Request, res: Response) => {
-  res.json({
-    service: 'rosca-backend',
-    message: 'ROSCA ledger API is running',
-    health: '/health',
-  });
+  res.json({ service: 'rosca-backend', message: 'ROSCA ledger API is running', health: '/health' });
 });
 
-// ---- Public / auth ----
 app.use('/api/auth', authLimiter, authRoutes);
-app.use('/api/auth/sessions', generalLimiter, authSessionsRouter);
-app.use('/api/users', usersRoutes);
-app.use('/api/branches', publicBranchesRouter);
-app.use('/api/circle-configurations', publicCircleConfigurationsRouter);
-app.use('/api/branch-admin/circle-configurations', branchAdminCircleConfigurationsRouter);
-app.use('/api/branches', branchTrustAccountRouter);
-
-// ---- KYC ----
-app.use('/api/kyc', kycRouter);
-app.use('/api/branch-admin/kyc', branchAdminKycRouter);
-app.use('/api/super-admin/kyc', superAdminKycRouter);
-app.use('/api/super-admin/payouts', superAdminPayoutsRouter);
-
-// ---- Tenants ----
-app.use('/api/tenants', tenantsRouter);
-app.use('/api/branch-admin/tenants', branchAdminTenantsRouter);
-app.use('/api/super-admin/tenants', superAdminTenantsRouter);
-
-// ---- Contributions ----
-app.use('/api/contributions', contributionsRouter);
-app.use('/api/branch-admin/contributions', branchAdminContributionsRouter);
-app.use('/api/branch-admin/payouts', branchAdminPayoutsRouter);
-
-// ---- Tenant-wide visibility (members) ----
-app.use('/api/tenants/me', tenantVisibilityRouter);
-app.use('/api/tenants/me', tenantPayoutVisibilityRouter);
-app.use('/api/tenants/me', tenantRenewalRouter);
-
-// ---- Tenure renewal (branch admin) ----
-app.use('/api/branch-admin/tenants', branchAdminRenewalRouter);
-
-// ---- Branch admin branch content ----
-app.use('/api/branch-admin/branches', branchAdminBranchesRouter);
-
-// ---- Receipts ----
-app.use('/api/receipts', receiptsRouter);
-
-// ---- Notifications ----
-app.use('/api/notifications', notificationsRouter);
-
-// ---- Stats ----
-app.use('/api/super-admin/stats', superAdminStatsRouter);
-app.use('/api/branch-admin/stats', branchAdminStatsRouter);
-
-// ---- Pool accounts / maintenance account ----
-app.use('/api/branch-admin/pool-account', branchAdminPoolAccountRouter);
-app.use('/api/saver/pool-account', saverPoolAccountRouter);
-app.use('/api/super-admin/maintenance-account', superAdminMaintenanceAccountRouter);
-app.use('/api/super-admin/branch-pool-account', superAdminBranchPoolAccountRouter);
-
-// ---- Super admin branches (must come after specific /api/super-admin paths) ----
-app.use('/api/super-admin/branches', superAdminBranchesRouter);
 
 app.use(notFoundHandler);
 app.use(errorHandler);
 
-// ---- HTTP server + Socket.IO ----
-
 const httpServer = createServer(app);
-initSocketIO(httpServer);
 
 async function shutdown(signal: string): Promise<void> {
   logger.info(`Received ${signal}, shutting down...`);
-  await Promise.allSettled([
-    stopAllWorkers(),
-    closeSocketIO(),
-    pool.end(),
-    closeRedis(),
-  ]);
   httpServer.close();
+  await Promise.allSettled([pool.end(), closeRedis()]);
   process.exit(0);
 }
 
-process.on('SIGINT', () => shutdown('SIGINT'));
-process.on('SIGTERM', () => shutdown('SIGTERM'));
+process.on('SIGINT', () => void shutdown('SIGINT'));
+process.on('SIGTERM', () => void shutdown('SIGTERM'));
 
 httpServer.listen(env.PORT, () => {
   logger.info(`ROSCA backend listening on http://localhost:${env.PORT}`);
   logger.info(`Health check: http://localhost:${env.PORT}/health`);
-  ensureWebPushInitialised();
-  // startAllWorkers(); // DISABLED: Upstash quota exceeded - will re-enable
-
-  void (async () => {
-    if (!env.SUPER_ADMIN_PHONE) return;
-
-    try {
-      await pool.query(
-        `UPDATE users SET role = 'SUPER_ADMIN', branch_id = NULL
-         WHERE phone = $1 AND role != 'SUPER_ADMIN'`,
-        [env.SUPER_ADMIN_PHONE],
-      );
-      logger.info({ superAdminPhone: env.SUPER_ADMIN_PHONE }, 'Super admin bootstrap checked');
-    } catch (err) {
-      logger.error({ err }, 'Super admin bootstrap failed');
-    }
-  })();
 });
 
 void redis;
