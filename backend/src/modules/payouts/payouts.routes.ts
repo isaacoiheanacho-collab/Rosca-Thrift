@@ -1,6 +1,6 @@
 import { Router, type Request, type Response, type NextFunction } from 'express';
 import { z } from 'zod';
-import { pool, withTransaction } from '../../db';
+import { withTransaction } from '../../db';
 import { AppError } from '../../errors/AppError';
 import { calculatePayout } from './payout-calculator';
 import { requireAuth } from '../auth/auth.middleware';
