@@ -55,7 +55,6 @@ const EnvSchema = z.object({
 
   // Operational tenant limit only; circle capacity and contribution amount are configuration-owned.
   MAX_TENANTS: z.coerce.number().int().positive().default(50),
-  PLATFORM_FEE_BPS: z.coerce.number().int().positive().default(150),
   BRANCH_JOIN_BASE_URL: z.string().url().default('http://localhost:3000/join'),
 
   // TextBee SMS
