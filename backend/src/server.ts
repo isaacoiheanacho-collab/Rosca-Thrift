@@ -13,7 +13,7 @@ import { requestId } from './middleware/requestId';
 import { errorHandler, notFoundHandler } from './middleware/errorHandler';
 import { generalLimiter, authLimiter } from './middleware/rateLimit';
 import { authRoutes } from './modules/auth/auth.routes';
-import { branchesRoutes, circleConfigurationsRoutes } from './modules';
+import { branchesRoutes, circleConfigurationsRoutes, tenantsRoutes } from './modules';
 
 const app = express();
 
@@ -57,6 +57,8 @@ app.use('/api/auth', authLimiter, authRoutes);
 app.use('/api/branches', branchesRoutes);
 app.use('/api/circle-configurations', circleConfigurationsRoutes);
 app.use('/api/branch-admin/circle-configurations', circleConfigurationsRoutes);
+app.use('/api/tenants', tenantsRoutes);
+app.use('/api/branch-admin/tenants', tenantsRoutes);
 
 app.use(notFoundHandler);
 app.use(errorHandler);
