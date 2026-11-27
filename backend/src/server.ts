@@ -13,7 +13,7 @@ import { requestId } from './middleware/requestId';
 import { errorHandler, notFoundHandler } from './middleware/errorHandler';
 import { generalLimiter, authLimiter } from './middleware/rateLimit';
 import { authRoutes } from './modules/auth/auth.routes';
-import { branchesRoutes, circleConfigurationsRoutes, tenantsRoutes, usersRoutes, contributionsRoutes, payoutsRoutes, kycRoutes, poolAccountsRoutes, ledgerRoutes, notificationsRoutes } from './modules';
+import { branchesRoutes, circleConfigurationsRoutes, tenantsRoutes, usersRoutes, contributionsRoutes, payoutsRoutes, kycRoutes, poolAccountsRoutes, ledgerRoutes, notificationsRoutes, receiptsRoutes } from './modules';
 
 const app = express();
 
@@ -66,6 +66,7 @@ app.use('/api/branch-admin/payouts', payoutsRoutes);
 app.use('/api/branch-admin/pool-account', poolAccountsRoutes);
 app.use('/api/branch-admin/ledger', ledgerRoutes);
 app.use('/api/notifications', notificationsRoutes);
+app.use('/api/receipts', receiptsRoutes);
 app.use('/api/branch-admin/tenants', tenantsRoutes);
 
 app.use(notFoundHandler);
