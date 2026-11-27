@@ -230,4 +230,30 @@ router.patch('/:tenantId/members/:memberId/verification', requireAuth, asyncRout
   res.json({ ok: true, data: result });
 }));
 
+
+router.get('/:tenantId/schedule', requireAuth, asyncRoute(async (req, res) => {
+  const tenantId = z.string().uuid().parse(req.params.tenantId);
+  const access = await pool.query(
+    `SELECT 1 FROM tenants t WHERE t.id = $1 AND (
+      EXISTS (SELECT 1 FROM tenant_members tm WHERE tm.tenant_id = t.id AND tm.user_id = $2 AND tm.registration_status = 'registered')
+      OR EXISTS (SELECT 1 FROM branch_admins ba WHERE ba.branch_id = t.branch_id AND ba.user_id = $2 AND ba.status = 'active')
+      OR $3::boolean
+    )`,
+    [tenantId, req.auth!.userId, req.auth!.role === 'SUPER_ADMIN'],
+  );
+  if (!access.rowCount) throw new AppError({ code: 'TENANT_FORBIDDEN', httpStatus: 403, message: 'You cannot view this circle schedule' });
+  const result = await pool.query(
+    `SELECT cp.id, cp.period_number, cp.period_start_at, cp.due_at, cp.period_end_at, cp.status,
+            pi.id AS payout_intent_id, pi.status AS payout_status,
+            pi.gross_pool_pence, pi.tvc_adjustment_pence, pi.amount_after_tvc_pence,
+            pi.platform_fee_pence, pi.net_payout_pence
+     FROM contribution_periods cp
+     LEFT JOIN payout_intents pi
+       ON pi.tenant_id = cp.tenant_id AND pi.collection_position = cp.period_number
+     WHERE cp.tenant_id = $1 ORDER BY cp.period_number`,
+    [tenantId],
+  );
+  res.json({ ok: true, data: result.rows });
+}));
+
 export { router as tenantsRoutes };
