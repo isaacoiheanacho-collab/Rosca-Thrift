@@ -1,0 +1,406 @@
+We need to rebuild the missing database and application layers around dynamic configuration, using the surviving infrastructure where it remains useful. I will not treat your deleted directories as accidental or restore them wholesale.
+2. Define the dynamic configuration rules
+These are the rules the rebuilt backend must implement.
+Area	Required behaviour
+Branch	A registered community/branch owns its configurations.
+Configuration	An admin can create multiple distinct configurations under one branch.
+Contribution	Amount is defined per configuration.
+Frequency	One frequency per configuration: weekly or monthly.
+Capacity	Maximum co-savers is defined per configuration, not globally.
+Collection positions	Defined by the configuration; for one payout per co-saver, the number of positions must match the number of co-savers.
+Duration	Derived from the configuration's frequency and collection positions.
+Immutability	A configuration's terms cannot be edited after creation. Changed terms require a new configuration.
+Tenant	Each tenant belongs to exactly one configuration and one branch.
+Tenant sequence	Each configuration has its own independent sequence of tenants.
+Activation	A tenant activates only when its capacity is filled and every member is onboarded and verified.
+Schedule	Contribution and payout schedules start from the actual activation date.
+Next tenant	When a tenant fills, the next tenant is generated under the same configuration.
+A configuration must remain distinct even when another configuration under the same branch has identical-looking terms, unless the product explicitly decides to prevent duplicate configurations.
+3. Implementation tasks — in execution order
+Phase A — Rebuild the database foundation
+Task 1. Design the database schema
+Create the database structure for:
+1.	Branches.
+2.	Branch administrators and user relationships.
+3.	Circle configurations.
+4.	Tenants/circles.
+5.	Tenant membership and assigned collection positions.
+6.	Contributions.
+7.	Contribution periods and schedules.
+8.	Payouts and payout intents.
+9.	Ledger transactions.
+10.	KYC/onboarding and verification status.
+11.	Pool-account references.
+12.	Receipts.
+13.	Notifications.
+14.	Configuration and tenant lifecycle history.
+15.	Schema migration tracking.
+Task 2. Create the configuration table
+Each configuration should store, at minimum:
+•	Unique configuration ID.
+•	Branch ID.
+•	Configuration name or label.
+•	Contribution amount.
+•	Contribution frequency.
+•	Maximum co-saver capacity.
+•	Number of collection positions.
+•	Calculated duration.
+•	Configuration status.
+•	Creation timestamp.
+•	Creator/admin ID.
+The configuration must retain its original terms even after it has been used to create tenants.
+Task 3. Create the tenant relationship
+Every tenant must reference:
+•	Its branch ID.
+•	Its configuration ID.
+•	Its tenant sequence number within that configuration.
+•	Its capacity.
+•	Its status.
+•	Its activation date.
+•	Its schedule start and end dates.
+The database must enforce the correct relationships and prevent a tenant from being attached to a configuration belonging to another branch.
+Task 4. Rebuild the migration system
+•	Create a clean numbered migration sequence.
+•	Create the initial schema migrations.
+•	Add migration tracking.
+•	Apply migrations transactionally.
+•	Fail clearly when required migrations are missing.
+•	Never silently report a successful migration when the SQL directory does not exist.
+The existing migration runner needs to be replaced or corrected as part of this work.
+Phase B — Rebuild configuration management
+Task 5. Create configuration validation
+Validate:
+•	Contribution amount is positive and expressed in the correct monetary unit.
+•	Frequency is either weekly or monthly.
+•	Capacity is a valid positive integer.
+•	Collection positions are valid for the selected capacity and payout model.
+•	Duration is calculated consistently.
+•	Configuration belongs to the authenticated administrator's branch.
+Task 6. Implement configuration creation
+A branch administrator must be able to:
+1.	Register a branch.
+2.	Access the branch dashboard.
+3.	Create a configuration.
+4.	Save its terms.
+5.	View the configuration.
+6.	Create additional configurations under the same branch.
+Task 7. Implement configuration retrieval
+Build endpoints and services for:
+•	Listing configurations belonging to a branch.
+•	Retrieving one configuration by ID.
+•	Publicly listing configurations available for joining.
+•	Retrieving the configuration details needed by a prospective co-saver.
+Access must be scoped to the correct branch and configuration.
+Task 8. Enforce configuration immutability
+•	Do not expose an ordinary update operation for the financial terms.
+•	Do not allow existing tenants to have their configuration changed.
+•	Do not allow contribution amounts, capacity, frequency or positions to be changed underneath an active tenant.
+•	A change in terms must create a new configuration.
+Phase C — Rebuild tenant provisioning
+Task 9. Implement configuration-based tenant creation
+Tenant creation must receive a configuration ID and derive its operating terms from that configuration.
+Task 10. Implement configuration-specific tenant sequencing
+For example:
+Branch: ABC Community 
+Apple Configuration
+Contribution Amount - xx, Contribution/Payout duration - Weekly or Monthly, Number of co-savers - yy, Number of cycle positions - yy
+Apple Group 1
+Apple Group 2
+Apple Group 3
+Independent sequence
+Orange configuration
+Contribution Amount - x, Contribution/Payout duration - Weekly or Monthly, Number of co-savers - y, Number of cycle positions - y
+Orange Group 1
+Orange Group 2
+Separate independent sequence
+•	Orange Group 1 and Apple Group 1 are different groups.
+•	Filling one configuration must not affect another configuration's group sequence.
+•	Group sequence numbers must be unique within their configuration.
+•	Multiple configurations must operate independently under the same branch.
+Task 12. Implement member allocation
+•	A joining member selects a configuration.
+•	The backend provisions the member under that configuration.
+•	The member is assigned a valid, unoccupied position.
+•	Position allocation must be concurrency-safe.
+•	Two simultaneous registrations must never receive the same position.
+•	The member must not be provisioned into a different configuration because another tenant is full.
+Task 13. Correct onboarding and verification
+Phone verification alone must not activate a tenant.
+•	Track registration.
+•	Track phone verification.
+•	Track KYC/onboarding status.
+•	Track final verification approval.
+•	Count only eligible, verified members toward activation.
+•	Prevent duplicate membership and position assignment.
+Task 14. Implement group activation
+A group activates only when:
+1.	All configured positions are occupied.
+2.	All required members have completed onboarding.
+3.	All members have passed the required verification.
+At activation:
+•	Record the actual activation timestamp.
+•	Set the contribution schedule start date.
+•	Set the payout schedule.
+•	Generate the required collection schedule.
+•	Transition the tenant into its active state.
+An incomplete group must not have an active contribution or payout timetable.
+Task 15. Implement automatic next-tenant generation
+When the current group reaches full capacity:
+•	Create the next group under the same configuration.
+•	Keep the new group separate from the full group.
+•	Do not copy another configuration's terms.
+•	Do not generate duplicate groups during concurrent requests.
+•	Keep each configuration's sequence independent.
+The new group can begin receiving members while the preceding group proceeds through its active tenure.
+Phase D — Rebuild contribution and schedule logic
+Task 16. Implement dynamic contribution requirements
+For each group, calculate the required contribution using its own configuration:
+\[ \text{ Group contribution pool} = \text{Contribution amount} \times \text{Configured co-saver capacity} \]
+For example, a £50 contribution with 20 co-savers produces a £1,000 gross contribution pool per collection period.
+The calculation must never use a global contribution amount.
+Task 17. Implement weekly and monthly scheduling
+•	Weekly configurations generate weekly contribution and payout periods.
+•	Monthly configurations generate monthly contribution and payout periods.
+•	The same frequency controls both contributions and payouts.
+•	Schedules are anchored to the tenant's actual activation date.
+•	Monthly scheduling must handle months with different numbers of days consistently.
+•	Time zones and date boundaries must be handled consistently.
+•	Incomplete tenants must not accumulate overdue periods.
+Task 18. Implement contribution recording
+•	Accept contributions against the correct tenant and period.
+•	Validate the amount against the configuration.
+•	Validate the contributor's membership and position.
+•	Prevent duplicate contributions for the same member and period.
+•	Track pending, received, failed and reconciled payments.
+•	Record payment references and timestamps.
+•	Maintain an auditable contribution history.
+Task 19. Implement contribution progress
+Calculate dynamically:
+•	Configured capacity.
+•	Occupied positions.
+•	Verified members.
+•	Expected contributions.
+•	Received contributions.
+•	Outstanding contributions.
+•	Collection progress.
+•	Tenant completion status.
+No dashboard or API calculation should divide by 12 or use 12 as a fixed loop boundary.
+Phase E — Rebuild payout and TVC logic
+TVC is a position-based adjustment capped at 50% of one single contribution amount.
+•	It is calculated using the co-saver's collection position (slot).
+•	The maximum adjustment is 50% of one contribution.
+•	It is not a percentage of the gross savings pool.
+•	It must derive dynamically from the configured contribution amount and collection positions.
+For example, if the contribution is £100, the maximum TVC adjustment is £50.
+Task 20. Implement dynamic payout positions
+•	Every collection position must come from the group's configuration.
+•	Payout order must cover the configured positions.
+•	Every eligible member receives the correct position.
+•	No payout position may be duplicated.
+•	Payout progression must stop at the configured final position.
+Task 21. Rebuild the TVC calculation
+TVC mean time value contribution percentage adjustment derived from the contribution amount. It is 50% of a single contribution amount. It is a fixed proportional deduction of the configured per-member contribution. The calculation must use the actual configured number of positions and the member's actual collection position. 
+an example using a £100 contribution and 5 co-savers, with the TVC adjustment capped at 50% of one contribution (£50).
+Collection position	TVC adjustment
+1st	-£50
+2nd	-£25
+3rd	£0
+4th	+£25
+5th	+£50
+The adjustments total zero.
+What this means:
+•	The first co-saver receives £50 less than the gross pool.
+•	The second receives £25 less.
+•	The third receives the gross pool.
+•	The fourth receives £25 more.
+•	The fifth receives £50 more.
+If the contribution is £200, the maximum adjustment becomes £100.
+The key principle: TVC scales with the contribution amount. The maximum adjustment is always 50% of one contribution, not 50% of the total pool.
+The implementation must use precise monetary arithmetic and define how the derived rate is converted into the relevant cycle rate. It must also test rounding and positive/negative adjustments across odd and even circle sizes.
+Task 22. Implement payout calculation
+For each payout:
+1.	Calculate the gross pool.
+2.	Calculate the TVC adjustment.
+3.	Calculate the payout amount after TVC.
+4.	Apply the 0.5% platform maintenance fee after TVC.
+5.	Calculate the final net payout.
+6.	Record each component separately.
+The platform must not hold or receive the savings pool. Funds remain in the designated account controlled by the branch administrator; the ledger records the transactions and reconciliation.
+Task 23. Implement payout lifecycle
+•	Create payout intents.
+•	Validate the correct collection position.
+•	Prevent duplicate payouts.
+•	Record approval and confirmation.
+•	Handle failed or reversed payouts.
+•	Reconcile payout records against contributions.
+•	Maintain a complete audit trail.
+Phase F — Rebuild tenure progression and renewal
+Task 24. Implement dynamic tenure completion
+A tenant's tenure completes only after all configured collection positions have been processed according to the payout rules.
+Task 25. Implement renewal
+•	Determine whether the completed group is eligible for renewal.
+•	Apply the configuration's terms to the next tenure where renewal is permitted.
+•	Recalculate the schedule from the correct start date.
+•	Prevent duplicate renewal.
+•	Preserve the completed tenure's history.
+•	Ensure the renewal process does not alter the original configuration.
+Task 26. Implement Group and configuration lifecycle states
+Define and enforce valid transitions for:
+•	Configuration: active, inactive or archived.
+•	Group: filling, awaiting verification, active, completed, suspended or cancelled.
+•	Contributions: pending, received, failed or reconciled.
+•	Payouts: pending, approved, paid, failed or reversed.
+The exact transition rules must be enforced in the service layer and database, not just in the interface.
+Phase G — Rebuild API, security and supporting services
+Task 27. Rebuild the deleted application modules
+The server currently imports modules that no longer exist. Recreate the necessary backend application modules around the new domain model:
+•	Authentication and sessions.
+•	Users and roles.
+•	Branch management.
+•	Circle configurations.
+•	Tenant provisioning and membership.
+•	KYC and verification.
+•	Contributions.
+•	Payouts.
+•	TVC.
+•	Ledger and reconciliation.
+•	Pool-account references.
+•	Receipts.
+•	Notifications.
+•	Statistics.
+•	Renewal and tenure progression.
+These are clean replacements based on the dynamic model, not a blind restoration of the deleted implementation.
+Task 28. Rebuild API validation and error messages
+Every endpoint must validate the configuration and group relationship. Replace old messages such as:
+Use configuration-aware messages, such as:
+•	"This circle has reached its configured capacity."
+•	"This configuration allows 20 co-savers."
+•	"All configured collection positions have been allocated."
+Task 29. Enforce authorisation and data isolation
+•	Branch administrators can manage only their own branch.
+•	They can manage only configurations belonging to that branch.
+•	Members can access only their own tenant and permitted shared information.
+•	Public users can only see configurations intended to be publicly available.
+•	Super administrators retain the appropriate oversight.
+•	Configuration IDs and tenant IDs must not allow cross-branch access.
+Task 30. Rebuild notifications and statistics
+Notifications and statistics must use configuration-derived values:
+•	Capacity and remaining places.
+•	Member verification.
+•	Tenant activation.
+•	Contribution due dates.
+•	Contribution completion.
+•	Upcoming payout positions.
+•	Payout amounts.
+•	Tenure completion and renewal.
+No notification, report or statistic should use a fixed 12-member assumption.
+Phase H — Rebuild tests and verification
+Task 31. Create a new backend test suite
+Rebuild tests from scratch because the old test scripts were deleted.
+The tests must cover:
+•	Configuration creation and validation.
+•	Multiple configurations under one branch.
+•	Configuration immutability.
+•	Configuration-specific tenant sequencing.
+•	Dynamic member allocation.
+•	Duplicate and concurrent registration.
+•	Verification and activation.
+•	Activation-based scheduling.
+•	Weekly and monthly frequencies.
+•	Contribution recording and reconciliation.
+•	Dynamic payout positions.
+•	TVC calculations.
+•	Platform fee calculations.
+•	Tenure completion and renewal.
+•	Authorisation and cross-branch isolation.
+Task 32. Test different circle capacities
+Required capacity test matrix
+For each capacity, test the full lifecycle:
+1.	Create configuration.
+2.	Provision tenant.
+3.	Allocate all positions.
+4.	Verify all members.
+5.	Activate tenant.
+6.	Generate contribution schedule.
+7.	Record contributions.
+8.	Calculate TVC.
+9.	Process every payout position.
+10.	Complete tenure.
+11.	Renew or progress as permitted.
+12.	Generate the next tenant without duplicating records.
+Task 33. Test boundary and failure conditions
+•	One member below capacity.
+•	Last available position.
+•	Duplicate registration.
+•	Concurrent final-position registration.
+•	Unverified member.
+•	Failed contribution.
+•	Failed payout.
+•	Duplicate payout request.
+•	Configuration belonging to another branch.
+•	Inactive configuration.
+•	Tenant reaching its final collection position.
+•	Monthly schedules across February and month-end.
+•	Tenant activation delayed by incomplete verification.
+Task 34. Restore automated quality checks
+Rebuild the backend package scripts for:
+•	Type checking.
+•	Compilation.
+•	Unit tests.
+•	Integration tests.
+•	Dynamic capacity tests.
+•	Database migration validation.
+Correct the existing GitHub Actions workflow so it no longer calls deleted test scripts. CI must test the new implementation directly.
+Phase I — Environment, documentation and deployment
+Task 35. Clean up environment configuration
+The three files were just updated, but there are still configuration issues to resolve:
+Existing setting	Required treatment
+CIRCLE_SIZE	Removed; must stay removed
+CONTRIBUTION_PENCE	Remove as a global circle contribution default; contribution comes from the selected configuration
+MAX_TENANTS=50	Retain only if this is the intended per-admin tenant limit; it is not circle capacity
+PLATFORM_FEE_BPS=150	Retain as the 1.5% platform fee
+TVC_ANNUAL_BPS=909	Correct to 200 if retained as the global 2% annual rate, and add it to validated environment configuration; alternatively define the rate centrally in the business rules
+The configuration-specific contribution amount must never be overridden by an environment variable.
+Task 36. Rebuild backend documentation
+Document:
+•	The branch/configuration/tenant relationship.
+•	Configuration creation and immutability.
+•	Dynamic capacity and position allocation.
+•	Tenant activation requirements.
+•	Weekly and monthly scheduling.
+•	Contribution and payout calculations.
+•	TVC and maintenance fee calculation.
+•	Tenant progression and renewal.
+•	API endpoints and validation.
+•	Environment configuration.
+•	Database migration and test commands.
+Task 37. Rebuild and deploy
+•	Install and validate backend dependencies.
+•	Run database migrations.
+•	Run type checking.
+•	Run compilation.
+•	Run the complete test suite.
+•	Verify the health endpoint.
+•	Verify all registered API routes.
+•	Verify database constraints.
+•	Deploy the backend.
+•	Verify the deployed application against the dynamic capacity test cases.
+5. Completion criteria
+The rebuild should not be considered complete simply because npm run build passes.
+It is complete when all of these are true:
+•	 A branch administrator can create multiple independent configurations.
+•	 Each configuration controls its own contribution amount, frequency, capacity and collection positions.
+•	 Tenants are created and sequenced independently under each configuration.
+•	 Members are allocated dynamically without duplicate positions.
+•	 Tenants activate only when full and all members are verified.
+•	 Contribution and payout schedules start from actual activation.
+•	 Contributions work at capacities above 12.
+•	 Every configured payout position is processed correctly.
+•	 TVC and the 1.5% fee are calculated correctly.
+•	 Tenure completion and renewal work dynamically.
+•	 Database constraints, API validation and user-facing messages contain no fixed 12-member assumptions.
+•	 Automated tests verify the complete lifecycle at different capacities.
+•	 The rebuilt backend compiles, starts, migrates and operates successfully.
+Implementation order: database → configuration management → tenant provisioning → activation and scheduling → contributions → payouts and TVC → renewal → supporting modules → tests → deployment.
+This is the rebuild scope. It does not include changing the frontend at this stage. The backend must first provide a complete, reliable dynamic-configuration API for the frontend to consume. No code changes were made as part of this analysis.
+
