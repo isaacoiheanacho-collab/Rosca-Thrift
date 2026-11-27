@@ -114,7 +114,7 @@ router.patch('/intents/:intentId/status', requireAuth, asyncRoute(async (req, re
       `SELECT pi.id, pi.tenant_id, t.branch_id, t.capacity, pi.status, pi.net_payout_pence,
               pi.platform_fee_pence, pi.recipient_member_id
        FROM payout_intents pi JOIN tenants t ON t.id = pi.tenant_id
-       WHERE pi.id = $1 FOR UPDATE OF pi`,
+       WHERE pi.id = $1 FOR UPDATE OF pi, t`,
       [intentId],
     );
     const intent = found.rows[0];
@@ -122,7 +122,7 @@ router.patch('/intents/:intentId/status', requireAuth, asyncRoute(async (req, re
     await assertBranchAccess(tx, intent.branch_id, req.auth!.userId, req.auth!.role);
 
     const allowed =
-      (input.status === 'approved' && ['pending', 'failed'].includes(intent.status)) ||
+      (input.status === 'approved' && ['pending', 'failed', 'reversed'].includes(intent.status)) ||
       (input.status === 'failed' && ['pending', 'approved'].includes(intent.status)) ||
       (input.status === 'paid' && intent.status === 'approved') ||
       (input.status === 'reversed' && intent.status === 'paid');
