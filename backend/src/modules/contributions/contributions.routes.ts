@@ -36,7 +36,7 @@ router.post('/', requireAuth, asyncRoute(async (req, res) => {
       [input.periodId, input.tenantId, req.auth!.userId],
     );
     const row = eligibility.rows[0];
-    if (!row || row.tenant_status !== 'active' || !['scheduled', 'open'].includes(row.period_status)) {
+    if (!row || row.tenant_status !== 'active' || row.period_status !== 'open') {
       throw new AppError({ code: 'CONTRIBUTION_NOT_ALLOWED', httpStatus: 409, message: 'Contribution cannot be recorded for this circle period' });
     }
     if (BigInt(row.contribution_amount_pence) !== BigInt(input.amountPence)) {
@@ -62,9 +62,10 @@ router.patch('/:contributionId/status', requireAuth, asyncRoute(async (req, res)
     const found = await tx.query<{
       id:string;tenant_id:string;branch_id:string;amount_pence:string;status:string;
     }>(
-      `SELECT c.id, c.tenant_id, t.branch_id, c.amount_pence, c.status
+      `SELECT c.id, c.tenant_id, c.period_id, t.branch_id, t.capacity, c.amount_pence, c.status
        FROM contributions c JOIN tenants t ON t.id = c.tenant_id
-       WHERE c.id = $1 FOR UPDATE OF c`,
+       JOIN contribution_periods cp ON cp.id = c.period_id
+       WHERE c.id = $1 FOR UPDATE OF c, cp`,
       [contributionId],
     );
     const contribution = found.rows[0];
@@ -109,6 +110,17 @@ router.patch('/:contributionId/status', requireAuth, asyncRoute(async (req, res)
        VALUES ($1, $2, 'contribution_received', $3, 'contribution', $4, $5, 'reconciled')`,
       [contribution.branch_id, contribution.tenant_id, contribution.amount_pence, contribution.id, input.paymentReference ?? null],
     );
+    const reconciled = await tx.query<{count:number}>(
+      "SELECT COUNT(*)::int AS count FROM contributions WHERE period_id = $1 AND status = 'reconciled'",
+      [contribution.period_id],
+    );
+    if (reconciled.rows[0].count === contribution.capacity) {
+      await tx.query("UPDATE contribution_periods SET status = 'completed' WHERE id = $1", [contribution.period_id]);
+      await tx.query(
+        "UPDATE contribution_periods SET status = 'open' WHERE tenant_id = $1 AND period_number = (SELECT period_number + 1 FROM contribution_periods WHERE id = $2) AND status = 'scheduled'",
+        [contribution.tenant_id, contribution.period_id],
+      );
+    }
     return result.rows[0];
   });
   res.json({ ok: true, data: updated });
