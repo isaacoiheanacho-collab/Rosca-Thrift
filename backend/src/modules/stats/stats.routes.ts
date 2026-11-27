@@ -31,16 +31,21 @@ router.get('/branch/:branchId', requireAuth, asyncRoute(async (req, res) => {
        WHERE branch_id = $1 GROUP BY status ORDER BY status`, [branchId],
     ),
     pool.query(
-      `SELECT COALESCE(SUM(t.capacity), 0)::int AS configured_positions,
-              COUNT(tm.id) FILTER (WHERE tm.registration_status = 'registered')::int AS occupied_positions,
-              COUNT(tm.id) FILTER (WHERE tm.registration_status = 'registered'
-                AND tm.onboarding_status = 'approved'
-                AND tm.verification_status = 'approved'
-                AND u.phone_verified_at IS NOT NULL)::int AS verified_members
-       FROM tenants t
-       LEFT JOIN tenant_members tm ON tm.tenant_id = t.id
-       LEFT JOIN users u ON u.id = tm.user_id
-       WHERE t.branch_id = $1 AND t.status NOT IN ('cancelled')`, [branchId],
+      `SELECT
+        (SELECT COALESCE(SUM(capacity), 0)::int FROM tenants
+         WHERE branch_id = $1 AND status <> 'cancelled') AS configured_positions,
+        (SELECT COUNT(*)::int FROM tenant_members tm
+         JOIN tenants t ON t.id = tm.tenant_id
+         WHERE t.branch_id = $1 AND t.status <> 'cancelled'
+           AND tm.registration_status = 'registered') AS occupied_positions,
+        (SELECT COUNT(*)::int FROM tenant_members tm
+         JOIN tenants t ON t.id = tm.tenant_id
+         JOIN users u ON u.id = tm.user_id
+         WHERE t.branch_id = $1 AND t.status <> 'cancelled'
+           AND tm.registration_status = 'registered'
+           AND tm.onboarding_status = 'approved'
+           AND tm.verification_status = 'approved'
+           AND u.phone_verified_at IS NOT NULL) AS verified_members`, [branchId],
     ),
     pool.query(
       `SELECT COUNT(*)::int AS recorded_contributions,
