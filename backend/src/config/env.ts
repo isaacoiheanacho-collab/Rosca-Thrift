@@ -53,9 +53,8 @@ const EnvSchema = z.object({
 
   LOG_LEVEL: z.enum(['fatal', 'error', 'warn', 'info', 'debug', 'trace']).default('info'),
 
-  // Tenant and branch configuration; circle capacity is defined per circle configuration.
+  // Operational tenant limit only; circle capacity and contribution amount are configuration-owned.
   MAX_TENANTS: z.coerce.number().int().positive().default(50),
-  CONTRIBUTION_PENCE: z.coerce.number().int().positive().default(100000),
   PLATFORM_FEE_BPS: z.coerce.number().int().positive().default(150),
   BRANCH_JOIN_BASE_URL: z.string().url().default('http://localhost:3000/join'),
 
