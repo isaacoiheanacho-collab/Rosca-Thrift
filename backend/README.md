@@ -60,6 +60,7 @@ OTP hashes are keyed, short-lived and attempt-limited. Refresh tokens are stored
 | PATCH | `/api/branch-admin/payouts/intents/:intentId/status` | Approve, pay, fail or reverse payout |
 | POST/GET | `/api/branch-admin/pool-account` and `/:branchId` | Manage branch-controlled account references |
 | GET | `/api/branch-admin/ledger/branch/:branchId` | Read branch-scoped ledger entries |
+| GET/PATCH | `/api/notifications` and `/:notificationId/read` | Read and mark own in-app notifications |
 
 ## Migrations
 
@@ -68,6 +69,7 @@ SQL migrations are in `src/sql`, applied lexically and transactionally, and trac
 - `001_initial_dynamic_schema.sql` — dynamic branch/configuration/tenant, membership, contribution, payout, ledger, KYC, pool reference, receipt, notification and lifecycle schema.
 - `002_auth_sessions.sql` — OTP challenges and refresh-token sessions.
 - `003_dynamic_integrity.sql` — database guards for configuration capacity, member positions, activation, completion, contribution amounts, period bounds and payout/TVC/fee arithmetic.
+- `004_notification_read_state.sql` — in-app notification read tracking.
 
 Run from `backend/`:
 
