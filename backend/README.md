@@ -49,6 +49,7 @@ OTP hashes are keyed, short-lived and attempt-limited. Refresh tokens are stored
 | POST | `/api/circle-configurations` | Create immutable configuration |
 | GET | `/api/circle-configurations/branch/:branchId` | List branch configurations |
 | POST | `/api/tenants/join` | Join configuration and allocate position |
+| GET | `/api/tenants/:tenantId/schedule` | Read activation-anchored contribution/payout periods |
 | POST | `/api/kyc` | Submit KYC provider/manual reference |
 | GET | `/api/kyc/me` | Read own KYC submissions |
 | GET | `/api/branch-admin/kyc/branch/:branchId/pending` | Branch KYC review queue |
