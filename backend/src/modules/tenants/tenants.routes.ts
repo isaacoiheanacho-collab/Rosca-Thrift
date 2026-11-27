@@ -109,4 +109,100 @@ router.post('/join', requireAuth, asyncRoute(async (req, res) => {
   res.status(201).json({ ok: true, data: joined });
 }));
 
+
+const verificationSchema = z.object({
+  onboardingStatus: z.enum(['approved', 'rejected']),
+  verificationStatus: z.enum(['approved', 'rejected']),
+}).strict();
+
+router.patch('/:tenantId/members/:memberId/verification', requireAuth, asyncRoute(async (req, res) => {
+  const tenantId = z.string().uuid().parse(req.params.tenantId);
+  const memberId = z.string().uuid().parse(req.params.memberId);
+  const input = verificationSchema.parse(req.body);
+  const result = await withTransaction(async (tx) => {
+    const tenantResult = await tx.query<{
+      id:string;branch_id:string;capacity:number;configuration_id:string;status:string;
+    }>('SELECT id, branch_id, capacity, configuration_id, status FROM tenants WHERE id = $1 FOR UPDATE', [tenantId]);
+    const tenant = tenantResult.rows[0];
+    if (!tenant) throw new AppError({ code: 'TENANT_NOT_FOUND', httpStatus: 404, message: 'Circle group not found' });
+
+    if (req.auth!.role !== 'SUPER_ADMIN') {
+      const admin = await tx.query(
+        "SELECT 1 FROM branch_admins WHERE branch_id = $1 AND user_id = $2 AND status = 'active'",
+        [tenant.branch_id, req.auth!.userId],
+      );
+      if (!admin.rowCount) throw new AppError({ code: 'BRANCH_FORBIDDEN', httpStatus: 403, message: 'You cannot verify members in this branch' });
+    }
+    if (!['awaiting_verification', 'filling'].includes(tenant.status)) {
+      throw new AppError({ code: 'TENANT_NOT_VERIFYING', httpStatus: 409, message: 'This circle group is not awaiting member verification' });
+    }
+
+    const updated = await tx.query(
+      `UPDATE tenant_members SET onboarding_status = $1, verification_status = $2,
+         verified_at = CASE WHEN $1 = 'approved' AND $2 = 'approved' THEN NOW() ELSE NULL END
+       WHERE id = $3 AND tenant_id = $4 AND registration_status = 'registered'
+       RETURNING id`,
+      [input.onboardingStatus, input.verificationStatus, memberId, tenantId],
+    );
+    if (!updated.rowCount) throw new AppError({ code: 'MEMBER_NOT_FOUND', httpStatus: 404, message: 'Registered circle member not found' });
+
+    const configResult = await tx.query<{frequency:'weekly'|'monthly';duration_periods:number}>(
+      'SELECT frequency, duration_periods FROM circle_configurations WHERE id = $1',
+      [tenant.configuration_id],
+    );
+    const config = configResult.rows[0];
+    const counts = await tx.query<{occupied:number;eligible:number}>(
+      `SELECT COUNT(*) FILTER (WHERE tm.registration_status = 'registered')::int AS occupied,
+              COUNT(*) FILTER (
+                WHERE tm.registration_status = 'registered'
+                  AND tm.onboarding_status = 'approved'
+                  AND tm.verification_status = 'approved'
+                  AND u.phone_verified_at IS NOT NULL
+              )::int AS eligible
+       FROM tenant_members tm JOIN users u ON u.id = tm.user_id
+       WHERE tm.tenant_id = $1`,
+      [tenantId],
+    );
+    let activated = false;
+    if (tenant.status === 'awaiting_verification'
+      && counts.rows[0].occupied === tenant.capacity
+      && counts.rows[0].eligible === tenant.capacity) {
+      await tx.query(
+        `UPDATE tenants SET status = 'active', activated_at = NOW(),
+           schedule_start_at = NOW(),
+           schedule_end_at = NOW() + CASE WHEN $2 = 'weekly'
+             THEN make_interval(weeks => $3) ELSE make_interval(months => $3) END
+         WHERE id = $1`,
+        [tenantId, config.frequency, config.duration_periods],
+      );
+      await tx.query(
+        `INSERT INTO contribution_periods
+          (tenant_id, period_number, period_start_at, due_at, period_end_at)
+         SELECT $1, period_number,
+           activation_time + CASE WHEN $2 = 'weekly'
+             THEN make_interval(weeks => period_number - 1)
+             ELSE make_interval(months => period_number - 1) END,
+           activation_time + CASE WHEN $2 = 'weekly'
+             THEN make_interval(weeks => period_number)
+             ELSE make_interval(months => period_number) END,
+           activation_time + CASE WHEN $2 = 'weekly'
+             THEN make_interval(weeks => period_number)
+             ELSE make_interval(months => period_number) END
+         FROM generate_series(1, $3::integer) AS period_number
+         CROSS JOIN (SELECT activated_at AS activation_time FROM tenants WHERE id = $1) activation`,
+        [tenantId, config.frequency, config.duration_periods],
+      );
+      await tx.query(
+        `INSERT INTO lifecycle_events
+          (branch_id, tenant_id, actor_user_id, entity_type, entity_id, event_type, previous_state, new_state, metadata)
+         VALUES ($1, $2, $3, 'tenant', $2, 'tenant_activated', 'awaiting_verification', 'active', $4::jsonb)`,
+        [tenant.branch_id, tenantId, req.auth!.userId, JSON.stringify({ capacity: tenant.capacity, durationPeriods: config.duration_periods, frequency: config.frequency })],
+      );
+      activated = true;
+    }
+    return { tenantId, memberId, onboardingStatus: input.onboardingStatus, verificationStatus: input.verificationStatus, occupied: counts.rows[0].occupied, verified: counts.rows[0].eligible, capacity: tenant.capacity, activated };
+  });
+  res.json({ ok: true, data: result });
+}));
+
 export { router as tenantsRoutes };
