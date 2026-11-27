@@ -35,7 +35,7 @@ export async function requestOtp(phone: string): Promise<{ message: string }> {
 }
 
 export async function verifyOtp(input: { phone: string; code: string }, meta: { userAgent: string | null; ipAddress: string | null }) {
-  const valid = await repo.consumeOtp(input.phone, hash(input.code));
+  const valid = await repo.consumeOtp(input.phone, hash(input.code), env.OTP_MAX_ATTEMPTS);
   if (!valid) throw new AppError({ code: 'INVALID_OTP', httpStatus: 401, message: 'The verification code is invalid or expired' });
   const user = await repo.createUserForVerifiedPhone(input.phone);
   const refreshToken = issueRefreshToken(user.id);
