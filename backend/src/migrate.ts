@@ -47,7 +47,7 @@ async function main(): Promise<void> {
     throw new Error(`No SQL migrations found in required directory: ${SQL_DIR}`);
   }
   for (const file of files) {
-    if (!/^\\d{3,}_[a-z0-9_]+\\.sql$/.test(file)) {
+    if (!/^\d{3,}_[a-z0-9_]+\.sql$/.test(file)) {
       throw new Error(`Invalid migration filename "${file}". Expected NNN_description.sql.`);
     }
   }
