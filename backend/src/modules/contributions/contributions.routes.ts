@@ -60,7 +60,7 @@ router.patch('/:contributionId/status', requireAuth, asyncRoute(async (req, res)
   const input = statusSchema.parse(req.body);
   const updated = await withTransaction(async (tx) => {
     const found = await tx.query<{
-      id:string;tenant_id:string;branch_id:string;amount_pence:string;status:string;
+      id:string;tenant_id:string;period_id:string;branch_id:string;capacity:number;amount_pence:string;status:string;
     }>(
       `SELECT c.id, c.tenant_id, c.period_id, t.branch_id, t.capacity, c.amount_pence, c.status
        FROM contributions c JOIN tenants t ON t.id = c.tenant_id
