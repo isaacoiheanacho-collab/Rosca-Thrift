@@ -64,7 +64,13 @@ export function calculateTvcAdjustmentPence(
 
   const positionFactor = BigInt(2 * collectionPosition - configuredCapacity - 1);
   const denominator = 2n * BigInt(configuredCapacity - 1);
-  return divideRounded(contributionAmountPence * positionFactor, denominator);
+  const rounded = divideRounded(contributionAmountPence * positionFactor, denominator);
+  // Integer-pence cap is rounded down so the adjustment never exceeds 50%
+  // of a single contribution, including odd-penny contribution amounts.
+  const cap = contributionAmountPence / 2n;
+  if (rounded > cap) return cap;
+  if (rounded < -cap) return -cap;
+  return rounded;
 }
 
 export function calculatePayout(input: PayoutCalculationInput): PayoutCalculation {
