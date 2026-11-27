@@ -145,6 +145,16 @@ router.patch('/:tenantId/members/:memberId/verification', requireAuth, asyncRout
       [input.onboardingStatus, input.verificationStatus, memberId, tenantId],
     );
     if (!updated.rowCount) throw new AppError({ code: 'MEMBER_NOT_FOUND', httpStatus: 404, message: 'Registered circle member not found' });
+    const kycStatus = input.onboardingStatus === 'approved' && input.verificationStatus === 'approved' ? 'approved' : 'rejected';
+    const reviewedKyc = await tx.query(
+      `UPDATE kyc_records SET status = $1, reviewed_at = NOW(), reviewed_by_user_id = $2
+       WHERE tenant_member_id = $3 AND status IN ('submitted', 'under_review')
+       RETURNING id`,
+      [kycStatus, req.auth!.userId, memberId],
+    );
+    if (kycStatus === 'approved' && !reviewedKyc.rowCount) {
+      throw new AppError({ code: 'KYC_SUBMISSION_REQUIRED', httpStatus: 409, message: 'The member must submit KYC before verification approval' });
+    }
 
     const configResult = await tx.query<{frequency:'weekly'|'monthly';duration_periods:number}>(
       'SELECT frequency, duration_periods FROM circle_configurations WHERE id = $1',
