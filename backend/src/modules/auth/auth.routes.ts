@@ -2,6 +2,7 @@ import { Router, type Request, type Response, type NextFunction } from 'express'
 import { requestOtpSchema, verifyOtpSchema, refreshSchema, logoutSchema } from './auth.schemas';
 import * as service from './auth.service';
 import { requireAuth } from './auth.middleware';
+import { z } from 'zod';
 
 const router = Router();
 const asyncRoute = (fn: (req: Request, res: Response) => Promise<void>) =>
@@ -30,6 +31,13 @@ router.post('/logout', asyncRoute(async (req, res) => {
   const body = logoutSchema.parse(req.body);
   await service.logout(body.refreshToken);
   res.json({ ok: true, data: { message: 'Session revoked' } });
+}));
+
+
+router.post('/super-admin/bootstrap', requireAuth, asyncRoute(async (req, res) => {
+  const body = z.object({ registrationSecret: z.string().min(1).max(512) }).strict().parse(req.body);
+  const data = await service.bootstrapSuperAdmin(req.auth!.userId, body.registrationSecret);
+  res.json({ ok: true, data });
 }));
 
 router.get('/me', requireAuth, asyncRoute(async (req, res) => {
