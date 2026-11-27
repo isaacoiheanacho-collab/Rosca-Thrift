@@ -5,3 +5,5 @@ export { usersRoutes } from './users/users.routes';
 export { contributionsRoutes } from './contributions/contributions.routes';
 export { payoutsRoutes } from './payouts/payouts.routes';
 export { kycRoutes } from './kyc/kyc.routes';
+export { poolAccountsRoutes } from './pool-accounts/pool-accounts.routes';
+export { ledgerRoutes } from './ledger/ledger.routes';
