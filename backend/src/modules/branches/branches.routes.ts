@@ -23,7 +23,7 @@ router.post('/', requireAuth, asyncRoute(async (req, res) => {
     );
     const row = created.rows[0];
     await tx.query('INSERT INTO branch_admins (branch_id, user_id) VALUES ($1, $2)', [row.id, req.auth!.userId]);
-    await tx.query("UPDATE users SET role = 'BRANCH_ADMIN', updated_at = NOW() WHERE id = $1", [req.auth!.userId]);
+    await tx.query("UPDATE users SET role = CASE WHEN role = 'SUPER_ADMIN' THEN role ELSE 'BRANCH_ADMIN' END, updated_at = NOW() WHERE id = $1", [req.auth!.userId]);
     return row;
   });
   res.status(201).json({ ok: true, data: branch });
