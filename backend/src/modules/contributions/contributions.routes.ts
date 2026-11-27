@@ -60,11 +60,12 @@ router.patch('/:contributionId/status', requireAuth, asyncRoute(async (req, res)
   const input = statusSchema.parse(req.body);
   const updated = await withTransaction(async (tx) => {
     const found = await tx.query<{
-      id:string;tenant_id:string;period_id:string;branch_id:string;capacity:number;amount_pence:string;status:string;
+      id:string;tenant_id:string;period_id:string;branch_id:string;capacity:number;amount_pence:string;status:string;payment_reference:string|null;tenant_member_id:string;user_id:string;
     }>(
-      `SELECT c.id, c.tenant_id, c.period_id, t.branch_id, t.capacity, c.amount_pence, c.status
+      `SELECT c.id, c.tenant_id, c.period_id, c.tenant_member_id, tm.user_id, t.branch_id, t.capacity, c.amount_pence, c.status, c.payment_reference
        FROM contributions c JOIN tenants t ON t.id = c.tenant_id
        JOIN contribution_periods cp ON cp.id = c.period_id
+       JOIN tenant_members tm ON tm.id = c.tenant_member_id
        WHERE c.id = $1 FOR UPDATE OF c, cp`,
       [contributionId],
     );
@@ -92,6 +93,13 @@ router.patch('/:contributionId/status', requireAuth, asyncRoute(async (req, res)
          RETURNING id, tenant_id, period_id, tenant_member_id, amount_pence, status, payment_reference, received_at`,
         [input.status, input.paymentReference ?? null, contributionId],
       );
+      if (input.status === 'received') {
+        await tx.query(
+          `INSERT INTO notifications (user_id, tenant_id, channel, notification_type, payload, status, sent_at)
+           VALUES ($1, $2, 'in_app', 'contribution.received', $3::jsonb, 'sent', NOW())`,
+          [contribution.user_id, contribution.tenant_id, JSON.stringify({ contributionId, amountPence: contribution.amount_pence, paymentReference: input.paymentReference })],
+        );
+      }
       return result.rows[0];
     }
 
@@ -108,11 +116,16 @@ router.patch('/:contributionId/status', requireAuth, asyncRoute(async (req, res)
       `INSERT INTO ledger_transactions
         (branch_id, tenant_id, transaction_type, amount_pence, reference_type, reference_id, external_reference, status)
        VALUES ($1, $2, 'contribution_received', $3, 'contribution', $4, $5, 'reconciled')`,
-      [contribution.branch_id, contribution.tenant_id, contribution.amount_pence, contribution.id, input.paymentReference ?? null],
+      [contribution.branch_id, contribution.tenant_id, contribution.amount_pence, contribution.id, input.paymentReference ?? contribution.payment_reference],
     );
     const reconciled = await tx.query<{count:number}>(
       "SELECT COUNT(*)::int AS count FROM contributions WHERE period_id = $1 AND status = 'reconciled'",
       [contribution.period_id],
+    );
+    await tx.query(
+      `INSERT INTO notifications (user_id, tenant_id, channel, notification_type, payload, status, sent_at)
+       VALUES ($1, $2, 'in_app', 'contribution.reconciled', $3::jsonb, 'sent', NOW())`,
+      [contribution.user_id, contribution.tenant_id, JSON.stringify({ contributionId, amountPence: contribution.amount_pence })],
     );
     if (reconciled.rows[0].count === contribution.capacity) {
       await tx.query("UPDATE contribution_periods SET status = 'completed' WHERE id = $1", [contribution.period_id]);
