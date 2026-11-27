@@ -165,6 +165,20 @@ router.patch('/intents/:intentId/status', requireAuth, asyncRoute(async (req, re
     if (input.status === 'reversed') {
       await tx.query("UPDATE payouts SET status = 'reversed' WHERE payout_intent_id = $1", [intentId]);
       await tx.query("UPDATE ledger_transactions SET status = 'reversed' WHERE reference_type = 'payout_intent' AND reference_id = $1", [intentId]);
+      await tx.query(
+        `INSERT INTO ledger_transactions
+          (branch_id, tenant_id, transaction_type, amount_pence, reference_type, reference_id, external_reference, status)
+         VALUES ($1, $2, 'payout_reversal', $3, 'payout_intent', $4, $5, 'recorded')`,
+        [intent.branch_id, intent.tenant_id, BigInt(intent.net_payout_pence).toString(), intent.id, input.paymentReference ?? null],
+      );
+      if (BigInt(intent.platform_fee_pence) > 0n) {
+        await tx.query(
+          `INSERT INTO ledger_transactions
+            (branch_id, tenant_id, transaction_type, amount_pence, reference_type, reference_id, external_reference, status)
+           VALUES ($1, $2, 'platform_fee_reversal', $3, 'payout_intent', $4, $5, 'recorded')`,
+          [intent.branch_id, intent.tenant_id, BigInt(intent.platform_fee_pence).toString(), intent.id, input.paymentReference ?? null],
+        );
+      }
     }
     return result.rows[0];
   });
