@@ -1,4 +1,4 @@
-import { createHash, randomInt, randomUUID } from 'node:crypto';
+import { createHash, createHmac, randomInt, randomUUID } from 'node:crypto';
 import jwt from 'jsonwebtoken';
 import { env } from '../../config/env';
 import { AppError } from '../../errors/AppError';
@@ -6,6 +6,8 @@ import { sendSms } from '../../utils/sms';
 import * as repo from './auth.repository';
 
 const hash = (value: string): string => createHash('sha256').update(value).digest('hex');
+const hashOtp = (phone: string, code: string): string =>
+  createHmac('sha256', env.JWT_ACCESS_SECRET).update(phone).update(':').update(code).digest('hex');
 const accessSecret = env.JWT_ACCESS_SECRET;
 const refreshSecret = env.JWT_REFRESH_SECRET;
 
@@ -28,14 +30,14 @@ export async function requestOtp(phone: string): Promise<{ message: string }> {
     ? env.DEV_OTP_OVERRIDE
     : String(randomInt(100000, 1000000));
   if (!/^\d{6}$/.test(code)) throw new AppError({ code: 'OTP_CONFIG_INVALID', httpStatus: 500, message: 'OTP configuration is invalid' });
-  await repo.createOtp(phone, hash(code), new Date(Date.now() + env.OTP_EXPIRY_MINUTES * 60_000));
+  await repo.createOtp(phone, hashOtp(phone, code), new Date(Date.now() + env.OTP_EXPIRY_MINUTES * 60_000));
   const sent = await sendSms(phone, `Your ROSCA verification code is ${code}. It expires in ${env.OTP_EXPIRY_MINUTES} minutes.`);
   if (!sent.ok) throw new AppError({ code: 'OTP_DELIVERY_FAILED', httpStatus: 502, message: 'Unable to deliver verification code' });
   return { message: 'If the phone number can receive messages, a verification code has been sent.' };
 }
 
 export async function verifyOtp(input: { phone: string; code: string }, meta: { userAgent: string | null; ipAddress: string | null }) {
-  const valid = await repo.consumeOtp(input.phone, hash(input.code), env.OTP_MAX_ATTEMPTS);
+  const valid = await repo.consumeOtp(input.phone, hashOtp(input.phone, input.code), env.OTP_MAX_ATTEMPTS);
   if (!valid) throw new AppError({ code: 'INVALID_OTP', httpStatus: 401, message: 'The verification code is invalid or expired' });
   const user = await repo.createUserForVerifiedPhone(input.phone);
   const refreshToken = issueRefreshToken(user.id);
