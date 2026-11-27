@@ -188,7 +188,7 @@ router.patch('/:tenantId/members/:memberId/verification', requireAuth, asyncRout
            activation_time + CASE WHEN $2 = 'weekly'
              THEN make_interval(weeks => period_number)
              ELSE make_interval(months => period_number) END
-         FROM generate_series(1, $3::integer) AS period_number
+         FROM generate_series(1, $3::integer) AS periods(period_number)
          CROSS JOIN (SELECT activated_at AS activation_time FROM tenants WHERE id = $1) activation`,
         [tenantId, config.frequency, config.duration_periods],
       );
