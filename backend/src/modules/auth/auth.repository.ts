@@ -27,14 +27,14 @@ export async function createOtp(phone: string, codeHash: string, expiresAt: Date
   });
 }
 
-export async function consumeOtp(phone: string, codeHash: string): Promise<boolean> {
+export async function consumeOtp(phone: string, codeHash: string, maxAttempts: number): Promise<boolean> {
   return withTransaction(async (tx) => {
     const result = await tx.query(
       `SELECT id FROM auth_otps
        WHERE phone_e164 = $1 AND code_hash = $2 AND consumed_at IS NULL
          AND expires_at > NOW() AND attempts < $3
        ORDER BY created_at DESC LIMIT 1 FOR UPDATE`,
-      [phone, codeHash, 5],
+      [phone, codeHash, maxAttempts],
     );
     const row = result.rows[0] as { id: string } | undefined;
     if (!row) {
