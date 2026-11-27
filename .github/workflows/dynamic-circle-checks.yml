@@ -1,7 +1,7 @@
-name: Dynamic circle upgrade checks
+name: Backend quality checks
 on:
   push:
-    branches: [main, feature/dynamic-circle-configurations]
+    branches: [main]
     paths:
       - 'backend/**'
       - '.github/workflows/dynamic-circle-checks.yml'
@@ -17,6 +17,8 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 20
+          cache: npm
+          cache-dependency-path: backend/package.json
       - name: Install dependencies
         working-directory: backend
         run: npm install --no-package-lock
@@ -26,6 +28,6 @@ jobs:
       - name: Build backend
         working-directory: backend
         run: npm run build
-      - name: Test dynamic TVC calculations
+      - name: Run backend tests
         working-directory: backend
-        run: npm run test:dynamic-tvc
+        run: node --test tests/*.test.cjs
