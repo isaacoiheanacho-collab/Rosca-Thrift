@@ -34,6 +34,7 @@ Each payout records gross pool, TVC adjustment, amount after TVC, platform fee a
 - `POST /api/auth/refresh` — `{ "refreshToken": "..." }`
 - `POST /api/auth/logout` — `{ "refreshToken": "..." }`
 - `GET /api/auth/me` — bearer access token required
+- `POST /api/auth/super-admin/bootstrap` — requires a verified phone matching `SUPER_ADMIN_PHONE` and `SUPER_ADMIN_REGISTRATION_SECRET; refresh the session after promotion.
 
 OTP hashes are keyed, short-lived and attempt-limited. Refresh tokens are stored as hashes and rotated on use. Authenticated routes use `Authorization: Bearer <accessToken>`.
 
