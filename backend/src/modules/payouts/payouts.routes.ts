@@ -161,6 +161,12 @@ router.patch('/intents/:intentId/status', requireAuth, asyncRoute(async (req, re
           [intent.branch_id, intent.tenant_id, (-BigInt(intent.platform_fee_pence)).toString(), intent.id, input.paymentReference],
         );
       }
+      await tx.query(
+        `INSERT INTO notifications (user_id, tenant_id, channel, notification_type, payload, status, sent_at)
+         SELECT user_id, $1, 'in_app', 'payout.paid', $2::jsonb, 'sent', NOW()
+         FROM tenant_members WHERE id = $3`,
+        [intent.tenant_id, JSON.stringify({ payoutIntentId: intent.id, netPayoutPence: intent.net_payout_pence, paymentReference: input.paymentReference }), intent.recipient_member_id],
+      );
       const paidCount = await tx.query<{count:number}>(
         "SELECT COUNT(*)::int AS count FROM payout_intents WHERE tenant_id = $1 AND status = 'paid'",
         [intent.tenant_id],
