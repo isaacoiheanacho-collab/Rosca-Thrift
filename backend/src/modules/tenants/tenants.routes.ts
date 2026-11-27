@@ -193,6 +193,10 @@ router.patch('/:tenantId/members/:memberId/verification', requireAuth, asyncRout
         [tenantId, config.frequency, config.duration_periods],
       );
       await tx.query(
+        "UPDATE contribution_periods SET status = 'open' WHERE tenant_id = $1 AND period_number = 1",
+        [tenantId],
+      );
+      await tx.query(
         `INSERT INTO lifecycle_events
           (branch_id, tenant_id, actor_user_id, entity_type, entity_id, event_type, previous_state, new_state, metadata)
          VALUES ($1, $2, $3, 'tenant', $2, 'tenant_activated', 'awaiting_verification', 'active', $4::jsonb)`,
