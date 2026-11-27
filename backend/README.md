@@ -23,7 +23,7 @@ For contribution `C`, capacity `N > 1`, and 1-based position `p`:
 
 `TVC = round(C × (2p − N − 1) / (2 × (N − 1)))`
 
-Round to the nearest penny, with half-penny ties away from zero. Mirrored positions are opposites and adjustments sum to zero. Capacity one has zero adjustment. A £100 contribution and five positions produce -£50, -£25, £0, +£25, +£50. The maximum absolute adjustment is 50% of one contribution, not 50% of the gross pool.
+Round to the nearest penny, with half-penny ties away from zero, then cap the result at the largest whole-penny amount not exceeding half the contribution. This preserves the strict 50% cap for odd-penny contributions. Mirrored positions are opposites and adjustments sum to zero. Capacity one has zero adjustment. A £100 contribution and five positions produce -£50, -£25, £0, +£25, +£50. The maximum absolute adjustment is 50% of one contribution, not 50% of the gross pool.
 
 Each payout records gross pool, TVC adjustment, amount after TVC, platform fee and net payout separately. The maintenance fee is **0.5% (50 basis points)** of the amount after TVC. The old 1.5% fee and old annual TVC rates are not used. The platform does not hold the savings pool; funds remain in the branch-admin-controlled account.
 
