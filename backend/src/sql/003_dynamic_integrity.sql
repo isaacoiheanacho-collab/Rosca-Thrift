@@ -99,8 +99,9 @@ FOR EACH ROW EXECUTE FUNCTION enforce_contribution_configuration_amount();
 
 CREATE FUNCTION enforce_contribution_period_bounds()
 RETURNS TRIGGER AS $$
-DECLARE tenant_status TEXT;
-DECLARE configured_duration INTEGER;
+DECLARE
+  tenant_status TEXT;
+  configured_duration INTEGER;
 BEGIN
   SELECT t.status, c.duration_periods INTO tenant_status, configured_duration
   FROM tenants t
