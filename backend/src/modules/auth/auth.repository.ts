@@ -113,3 +113,13 @@ export async function findUserById(id: string): Promise<UserRecord | null> {
   );
   return result.rows[0] ?? null;
 }
+
+export async function promoteSuperAdmin(userId: string): Promise<UserRecord | null> {
+  const result = await pool.query<UserRecord>(
+    `UPDATE users SET role = 'SUPER_ADMIN', updated_at = NOW()
+     WHERE id = $1
+     RETURNING id, full_name, phone_e164, email, role, phone_verified_at`,
+    [userId],
+  );
+  return result.rows[0] ?? null;
+}
