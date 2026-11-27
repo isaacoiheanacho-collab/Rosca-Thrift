@@ -9,3 +9,4 @@ export { poolAccountsRoutes } from './pool-accounts/pool-accounts.routes';
 export { ledgerRoutes } from './ledger/ledger.routes';
 export { notificationsRoutes } from './notifications/notifications.routes';
 export { receiptsRoutes } from './receipts/receipts.routes';
+export { statsRoutes } from './stats/stats.routes';
