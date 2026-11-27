@@ -58,6 +58,15 @@ router.post('/', requireAuth, asyncRoute(async (req, res) => {
 router.get('/branch/:branchId', requireAuth, asyncRoute(async (req, res) => {
   const branchId = z.string().uuid().parse(req.params.branchId);
   const isSuper = req.auth!.role === 'SUPER_ADMIN';
+  if (!isSuper) {
+    const access = await pool.query(
+      "SELECT 1 FROM branch_admins WHERE branch_id = $1 AND user_id = $2 AND status = 'active'",
+      [branchId, req.auth!.userId],
+    );
+    if (!access.rowCount) {
+      throw new AppError({ code: 'BRANCH_FORBIDDEN', httpStatus: 403, message: 'You cannot view this branch configurations' });
+    }
+  }
   const result = await pool.query(
     `SELECT c.id, c.branch_id, c.name, c.contribution_amount_pence, c.frequency,
             c.max_co_savers, c.collection_positions, c.duration_periods, c.status,
@@ -69,10 +78,6 @@ router.get('/branch/:branchId', requireAuth, asyncRoute(async (req, res) => {
      ORDER BY c.created_at DESC`,
     [branchId, isSuper, req.auth!.userId],
   );
-  if (!isSuper && !result.rows.length) {
-    const ownsBranch = await pool.query('SELECT 1 FROM branches WHERE id = $1', [branchId]);
-    if (ownsBranch.rowCount) throw new AppError({ code: 'BRANCH_FORBIDDEN', httpStatus: 403, message: 'You cannot view this branch configurations' });
-  }
   res.json({ ok: true, data: result.rows });
 }));
 
