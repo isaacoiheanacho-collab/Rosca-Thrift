@@ -9,8 +9,8 @@
   },
   "scripts": {
     "dev": "nodemon",
-    "build": "tsc",
-    "start": "npm run migrate && node dist/server.js",
+    "build": "tsc && node -e \"require('node:fs').cpSync('src/sql', 'dist/sql', { recursive: true })\"",
+    "start": "node dist/migrate.js && node dist/server.js",
     "typecheck": "tsc --noEmit",
     "migrate": "ts-node --transpile-only src/migrate.ts"
   },
