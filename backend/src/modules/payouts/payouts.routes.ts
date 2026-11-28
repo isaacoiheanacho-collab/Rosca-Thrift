@@ -39,8 +39,8 @@ router.post('/intents', requireAuth, asyncRoute(async (req, res) => {
     if (tenant.status !== 'active') throw new AppError({ code: 'TENANT_NOT_ACTIVE', httpStatus: 409, message: 'Payouts can only be prepared for an active circle group' });
     if (input.collectionPosition > tenant.capacity) throw new AppError({ code: 'INVALID_PAYOUT_POSITION', httpStatus: 400, message: 'Payout position exceeds this circle configured capacity' });
 
-    const configResult = await tx.query<{contribution_amount_pence:string;collection_positions:number}>(
-      'SELECT contribution_amount_pence, collection_positions FROM circle_configurations WHERE id = $1',
+    const configResult = await tx.query<{contribution_amount_pence:string;collection_positions:number;maintenance_fee_bps:number}>(
+      'SELECT contribution_amount_pence, collection_positions, maintenance_fee_bps FROM circle_configurations WHERE id = $1',
       [tenant.configuration_id],
     );
     const config = configResult.rows[0];
@@ -74,6 +74,7 @@ router.post('/intents', requireAuth, asyncRoute(async (req, res) => {
       contributionAmountPence: BigInt(config.contribution_amount_pence),
       configuredCapacity: tenant.capacity,
       collectionPosition: input.collectionPosition,
+      platformFeeBps: BigInt(config.maintenance_fee_bps),
     });
     const idempotencyKey = `payout:${tenant.id}:${input.collectionPosition}`;
     const created = await tx.query(

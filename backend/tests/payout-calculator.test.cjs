@@ -1,4 +1,4 @@
-const test = require('node:test');
+﻿const test = require('node:test');
 const assert = require('node:assert/strict');
 const {
   calculatePayout,
@@ -32,6 +32,7 @@ test('capacity one has no TVC adjustment', () => {
 test('applies 0.5% fee after TVC and returns each component', () => {
   const result = calculatePayout({
     contributionAmountPence: 10_000n,
+    platformFeeBps: 50n,
     configuredCapacity: 5,
     collectionPosition: 1,
   });
@@ -56,4 +57,36 @@ test('never exceeds half a contribution for odd penny amounts', () => {
   assert.deepEqual(adjustments, [-5_000n, -2_500n, 0n, 2_500n, 5_000n]);
   assert.equal(adjustments.reduce((sum, value) => sum + value, 0n), 0n);
   assert.ok(adjustments.every((value) => value * 2n <= 10_001n && value * 2n >= -10_001n));
+});
+
+
+test('applies the configured 1% fee after TVC', () => {
+  const result = calculatePayout({
+    contributionAmountPence: 10_000n,
+    platformFeeBps: 100n,
+    configuredCapacity: 5,
+    collectionPosition: 1,
+  });
+
+  assert.equal(result.grossPoolPence, 50_000n);
+  assert.equal(result.amountAfterTvcPence, 45_000n);
+  assert.equal(result.platformFeeBps, 100n);
+  assert.equal(result.platformFeePence, 450n);
+  assert.equal(result.netPayoutPence, 44_550n);
+});
+
+test('rejects an invalid platform fee rate', () => {
+  assert.throws(() => calculatePayout({
+    contributionAmountPence: 10_000n,
+    platformFeeBps: 10_001n,
+    configuredCapacity: 5,
+    collectionPosition: 1,
+  }));
+
+  assert.throws(() => calculatePayout({
+    contributionAmountPence: 10_000n,
+    platformFeeBps: -1n,
+    configuredCapacity: 5,
+    collectionPosition: 1,
+  }));
 });

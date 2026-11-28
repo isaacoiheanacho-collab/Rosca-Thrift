@@ -19,7 +19,8 @@ const asyncRoute = (fn: (req: Request, res: Response) => Promise<void>) =>
 router.get('/public', asyncRoute(async (_req, res) => {
   const result = await pool.query(
     `SELECT c.id, c.branch_id, b.name AS branch_name, c.name, c.contribution_amount_pence,
-            c.frequency, c.max_co_savers, c.collection_positions, c.duration_periods
+            c.frequency, c.max_co_savers, c.collection_positions, c.duration_periods,
+            c.maintenance_fee_bps
      FROM circle_configurations c JOIN branches b ON b.id = c.branch_id
      WHERE c.status = 'active' AND c.public_join_enabled = TRUE AND b.status = 'active'
      ORDER BY b.name, c.name`,
@@ -39,16 +40,24 @@ router.post('/', requireAuth, asyncRoute(async (req, res) => {
     }
     const branch = await tx.query("SELECT id FROM branches WHERE id = $1 AND status = 'active' FOR UPDATE", [input.branchId]);
     if (!branch.rowCount) throw new AppError({ code: 'BRANCH_NOT_FOUND', httpStatus: 404, message: 'Active branch not found' });
+    const policy = await tx.query<{ maintenance_fee_bps: number }>(
+      'SELECT maintenance_fee_bps FROM platform_maintenance_fee_policy WHERE id = 1 FOR SHARE',
+    );
+    const currentFee = policy.rows[0];
+    if (!currentFee) {
+      throw new AppError({ code: 'PLATFORM_FEE_POLICY_MISSING', httpStatus: 500, message: 'Platform maintenance fee policy is not configured' });
+    }
+
     const result = await tx.query(
       `INSERT INTO circle_configurations
        (branch_id, name, contribution_amount_pence, frequency, max_co_savers,
-        collection_positions, duration_periods, public_join_enabled, created_by_user_id)
-       VALUES ($1, $2, $3, $4, $5, $5, $5, $6, $7)
+        collection_positions, duration_periods, public_join_enabled, maintenance_fee_bps, created_by_user_id)
+       VALUES ($1, $2, $3, $4, $5, $5, $5, $6, $7, $8)
        RETURNING id, branch_id, name, contribution_amount_pence, frequency,
                  max_co_savers, collection_positions, duration_periods, status,
-                 public_join_enabled, created_at`,
+                 public_join_enabled, maintenance_fee_bps, created_at`,
       [input.branchId, input.name, input.contributionAmountPence, input.frequency,
-       input.capacity, input.publicJoinEnabled, req.auth!.userId],
+       input.capacity, input.publicJoinEnabled, currentFee.maintenance_fee_bps, req.auth!.userId],
     );
     return result.rows[0];
   });
@@ -70,7 +79,7 @@ router.get('/branch/:branchId', requireAuth, asyncRoute(async (req, res) => {
   const result = await pool.query(
     `SELECT c.id, c.branch_id, c.name, c.contribution_amount_pence, c.frequency,
             c.max_co_savers, c.collection_positions, c.duration_periods, c.status,
-            c.public_join_enabled, c.created_at
+            c.public_join_enabled, c.maintenance_fee_bps, c.created_at
      FROM circle_configurations c
      WHERE c.branch_id = $1 AND ($2::boolean OR EXISTS (
        SELECT 1 FROM branch_admins ba WHERE ba.branch_id = c.branch_id
@@ -86,7 +95,7 @@ router.get('/:configurationId', asyncRoute(async (req, res) => {
   const result = await pool.query(
     `SELECT c.id, c.branch_id, b.name AS branch_name, c.name,
             c.contribution_amount_pence, c.frequency, c.max_co_savers,
-            c.collection_positions, c.duration_periods
+            c.collection_positions, c.duration_periods, c.maintenance_fee_bps
      FROM circle_configurations c JOIN branches b ON b.id = c.branch_id
      WHERE c.id = $1 AND c.status = 'active' AND b.status = 'active'
        AND c.public_join_enabled = TRUE`, [id],

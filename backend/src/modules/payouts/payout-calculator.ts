@@ -3,17 +3,17 @@
  *
  * All monetary values are integer pence. TVC is a zero-sum position
  * adjustment spanning -50% to +50% of one configured contribution.
- * The platform maintenance fee is 0.5% (50 basis points), applied
- * after TVC. No global contribution or circle-size defaults are used.
+ * The platform maintenance fee is supplied by the circle configuration,
+ * in basis points and applied after TVC. No global fee default is used.
  */
 
-export const PLATFORM_MAINTENANCE_FEE_BPS = 50n;
 const BASIS_POINTS = 10_000n;
 
 export interface PayoutCalculationInput {
   contributionAmountPence: bigint;
   configuredCapacity: number;
   collectionPosition: number;
+  platformFeeBps: bigint;
 }
 
 export interface PayoutCalculation {
@@ -74,7 +74,10 @@ export function calculateTvcAdjustmentPence(
 }
 
 export function calculatePayout(input: PayoutCalculationInput): PayoutCalculation {
-  const { contributionAmountPence, configuredCapacity, collectionPosition } = input;
+  const { contributionAmountPence, configuredCapacity, collectionPosition, platformFeeBps } = input;
+  if (platformFeeBps < 0n || platformFeeBps > BASIS_POINTS) {
+    throw new RangeError('Platform maintenance fee must be between 0 and 10000 basis points');
+  }
   const tvcAdjustmentPence = calculateTvcAdjustmentPence(
     contributionAmountPence,
     configuredCapacity,
@@ -88,7 +91,7 @@ export function calculatePayout(input: PayoutCalculationInput): PayoutCalculatio
   }
 
   const platformFeePence = divideRounded(
-    amountAfterTvcPence * PLATFORM_MAINTENANCE_FEE_BPS,
+    amountAfterTvcPence * platformFeeBps,
     BASIS_POINTS,
   );
   const netPayoutPence = amountAfterTvcPence - platformFeePence;
@@ -97,7 +100,7 @@ export function calculatePayout(input: PayoutCalculationInput): PayoutCalculatio
     grossPoolPence,
     tvcAdjustmentPence,
     amountAfterTvcPence,
-    platformFeeBps: PLATFORM_MAINTENANCE_FEE_BPS,
+    platformFeeBps,
     platformFeePence,
     netPayoutPence,
   };
